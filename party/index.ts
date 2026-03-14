@@ -49,10 +49,10 @@ export default class ChessRoom implements Party.Server {
       this.blackId      = state.blackId
       this.moves        = state.moves
       this.drawOfferedBy = state.drawOfferedBy
-      this.timeControl  = state.timeControl
-      this.whiteTime    = state.whiteTime
-      this.blackTime    = state.blackTime
-      this.lastMoveAt   = state.lastMoveAt
+      this.timeControl  = state.timeControl ?? null
+      this.whiteTime    = state.whiteTime ?? 0
+      this.blackTime    = state.blackTime ?? 0
+      this.lastMoveAt   = state.lastMoveAt ?? null
       this.game = new Chess(state.fen)
     }
   }
@@ -261,13 +261,15 @@ export default class ChessRoom implements Party.Server {
     // ── Flag (client clock hit 0) ─────────────────────────────────────────────
     if (msg.type === 'flag') {
       if (!this.timeControl || !this.lastMoveAt || this.game.isGameOver()) return
-      // The flagging player is claiming their opponent timed out.
-      // Validate: opponent is the side to move, and their clock ran out.
-      const opponentColor: PlayerColor = senderColor === 'w' ? 'b' : 'w'
-      const timedOut = this.tickClock(opponentColor)
+      // Both clients send 'flag' when the side-to-move's clock hits 0.
+      // Always check the side whose turn it is — regardless of who sent the flag.
+      const toMove = this.game.turn() as PlayerColor
+      const timedOut = this.tickClock(toMove)
       if (timedOut) {
+        const winner: PlayerColor = toMove === 'w' ? 'b' : 'w'
+        this.lastMoveAt = null  // prevent a second flag from double-broadcasting
         await this.persist()
-        broadcast(this.room, { type: 'game-over', reason: 'timeout', winner: senderColor })
+        broadcast(this.room, { type: 'game-over', reason: 'timeout', winner })
       }
       return
     }

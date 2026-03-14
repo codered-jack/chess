@@ -76,7 +76,7 @@ export default function ChessApp() {
   const [showHints, setShowHints] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(true)
   const [boardFullscreen, setBoardFullscreen] = useState(false)
-  const [leftPanelOpen, setLeftPanelOpen] = useState(false)
+  const [leftPanelOpen, setLeftPanelOpen] = useState(true)
   const [rightPanelOpen, setRightPanelOpen] = useState(true)
 
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
@@ -618,9 +618,9 @@ export default function ChessApp() {
         setFlipped(msg.color === 'b')
         setPlayerColor(msg.color)
         // Sync timer from server (always, so both players share the same clock)
-        setTimeControl(msg.timeControl)
-        setWhiteTime(msg.whiteTime)
-        setBlackTime(msg.blackTime)
+        setTimeControl(msg.timeControl ?? null)
+        setWhiteTime(msg.whiteTime ?? 0)
+        setBlackTime(msg.blackTime ?? 0)
         // Restore board state for reconnections
         if (msg.moves.length > 0) {
           const tmp = new Chess()
