@@ -372,7 +372,7 @@ export default function ChessApp() {
                 console.log(`[SF:client][${cid}] applying AI move ${data.bestMove}`)
                 const next = new Chess(fen)
                 try {
-                  const mv = next.move({ from, to, promotion: promo ?? 'q' })
+                  const mv = next.move({ from, to, ...(promo ? { promotion: promo } : {}) })
                   if (mv) {
                     const soundType = getSoundType(next, mv)
                     applyMove(next.fen(), { from, to, san: mv.san, lan: mv.lan, promotion: promo }, moveIndex, soundType)
