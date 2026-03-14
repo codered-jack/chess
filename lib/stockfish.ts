@@ -26,7 +26,10 @@ class StockfishEngine extends EventEmitter {
   private process: ChildProcessWithoutNullStreams | null = null
   private buffer = ''
   private ready = false
+  private failed = false
+  private startError: Error | null = null
   private readyResolvers: Array<() => void> = []
+  private readyRejectors: Array<(error: Error) => void> = []
   private backend: 'native' | 'wasm-node' | null = null
 
   start() {
@@ -66,9 +69,25 @@ class StockfishEngine extends EventEmitter {
       console.error('[SF stderr]', data.toString())
     })
 
+    this.process.on('error', (err) => {
+      this.failed = true
+      this.startError = err
+      this.readyRejectors.forEach((reject) => reject(err))
+      this.readyRejectors = []
+      this.readyResolvers = []
+      console.error('[SF] process failed to start:', err.message)
+    })
+
     this.process.on('exit', (code) => {
       console.log('[SF] process exited with code', code, 'backend:', this.backend)
       this.ready = false
+      if (!this.failed && !this.ready) {
+        this.failed = true
+        this.startError = new Error(`Stockfish process exited before ready (code ${code ?? 'unknown'})`)
+        this.readyRejectors.forEach((reject) => reject(this.startError as Error))
+        this.readyRejectors = []
+        this.readyResolvers = []
+      }
     })
 
     this.send('uci')
@@ -143,8 +162,31 @@ class StockfishEngine extends EventEmitter {
 
   waitReady(): Promise<void> {
     if (this.ready) return Promise.resolve()
-    return new Promise((resolve) => {
+    if (this.failed && this.startError) return Promise.reject(this.startError)
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        const err = new Error('Stockfish engine startup timed out')
+        this.failed = true
+        this.startError = err
+        reject(err)
+      }, 15000)
+
       this.readyResolvers.push(resolve)
+      this.readyRejectors.push(reject)
+
+      const wrappedResolve = () => {
+        clearTimeout(timeout)
+        resolve()
+      }
+
+      const wrappedReject = (err: Error) => {
+        clearTimeout(timeout)
+        reject(err)
+      }
+
+      this.readyResolvers[this.readyResolvers.length - 1] = wrappedResolve
+      this.readyRejectors[this.readyRejectors.length - 1] = wrappedReject
     })
   }
 
