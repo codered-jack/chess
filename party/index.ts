@@ -6,6 +6,7 @@ import type {
   PlayerColor,
   OnlineMove,
   ServerTimeControlSet,
+  ServerNewGame,
 } from '../lib/online'
 
 type ConnState = { color: PlayerColor }
@@ -255,6 +256,29 @@ export default class ChessRoom implements Party.Server {
         await this.persist()
         broadcast(this.room, { type: 'game-over', reason: 'draw' })
       }
+      return
+    }
+
+    // ── New game (rematch in same room) ──────────────────────────────────────
+    if (msg.type === 'new-game') {
+      // Both players must be present to start a rematch
+      if (!this.whiteId || !this.blackId) {
+        send(sender, { type: 'error', message: 'Opponent is not connected' }); return
+      }
+      this.game         = new Chess()
+      this.moves        = []
+      this.drawOfferedBy = null
+      this.lastMoveAt   = null
+      this.whiteTime    = this.timeControl ?? 0
+      this.blackTime    = this.timeControl ?? 0
+      await this.persist()
+      const ngMsg: ServerNewGame = {
+        type: 'new-game',
+        timeControl: this.timeControl,
+        whiteTime:   this.whiteTime,
+        blackTime:   this.blackTime,
+      }
+      broadcast(this.room, ngMsg)
       return
     }
 

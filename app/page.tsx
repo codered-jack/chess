@@ -685,6 +685,21 @@ export default function ChessApp() {
         return
       }
 
+      if (msg.type === 'new-game') {
+        // Server confirmed rematch — reset board in place, same room/players
+        abortRef.current?.abort()
+        setAllPositions([INITIAL_FEN]); setAllMoves([]); setCurrentMoveIndex(-1)
+        setRedoStack([]); setSelectedSquare(null); setLegalMoves([])
+        setLastMove(null); setBestMoveArrow([]); setEngineLines([])
+        setLatestScore(null); setIsAnalyzing(false); setResigned(null); setShowGameOverModal(false)
+        setDrawAccepted(false); setShowDrawOfferModal(false); setAllAnnotations([])
+        setTimedOut(null)
+        setTimeControl(msg.timeControl)
+        setWhiteTime(msg.whiteTime)
+        setBlackTime(msg.blackTime)
+        return
+      }
+
       if (msg.type === 'draw-offer') {
         setOnlineDrawOffered(true)
         setShowDrawOfferModal(true)
@@ -884,14 +899,7 @@ export default function ChessApp() {
     setSelectedSquare(null); setLegalMoves([]); setBestMoveArrow([])
   }
 
-  const handleNewGame = () => {
-    if (gameMode === 'two-player' && onlineRoomId) {
-      // Close the old room and open a brand-new one (avoids "room is full" on same room)
-      resetOnlineState()
-      const newRoomId = crypto.randomUUID()
-      setOnlineRoomId(newRoomId)
-      setOnlineWaiting(true)
-    }
+  const resetLocalGameState = () => {
     abortRef.current?.abort()
     setAllPositions([INITIAL_FEN]); setAllMoves([]); setCurrentMoveIndex(-1)
     setRedoStack([]); setSelectedSquare(null); setLegalMoves([])
@@ -899,6 +907,16 @@ export default function ChessApp() {
     setLatestScore(null); setIsAnalyzing(false); setResigned(null); setShowGameOverModal(false)
     setDrawAccepted(false); setShowDrawOfferModal(false); setAllAnnotations([])
     setTimedOut(null); setWhiteTime(timeControl ?? 0); setBlackTime(timeControl ?? 0)
+  }
+
+  const handleNewGame = () => {
+    if (gameMode === 'two-player' && onlineRoomId) {
+      // Send new-game to server; server resets state and broadcasts back to both players
+      // so the room stays the same — no new URL/invite needed
+      sendOnlineMessage({ type: 'new-game' })
+      return
+    }
+    resetLocalGameState()
   }
 
   const handleResign = () => {
