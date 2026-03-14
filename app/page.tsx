@@ -95,6 +95,10 @@ export default function ChessApp() {
     void sound.play().catch(() => {})
   }, [soundEnabled])
 
+  // Incremented when an AI move is illegal so the useEffect re-fires and retries the engine
+  const [engineRetryKey, setEngineRetryKey] = useState(0)
+  const aiRetryCountRef = useRef(0)
+
   const [resigned, setResigned] = useState<'w' | 'b' | null>(null)
   const [showResignModal, setShowResignModal] = useState(false)
   const [showGameOverModal, setShowGameOverModal] = useState(false)
@@ -369,18 +373,26 @@ export default function ChessApp() {
               }
 
               if (isAiTurn && !controller.signal.aborted) {
-                console.log(`[SF:client][${cid}] applying AI move ${data.bestMove}`)
+                console.log(`[SF:client][${cid}] applying AI move ${data.bestMove} | fen: ${fen.slice(0, 50)}`)
                 const next = new Chess(fen)
+                let moveOk = false
                 try {
                   const mv = next.move({ from, to, ...(promo ? { promotion: promo } : {}) })
                   if (mv) {
+                    moveOk = true
+                    aiRetryCountRef.current = 0
                     const soundType = getSoundType(next, mv)
                     applyMove(next.fen(), { from, to, san: mv.san, lan: mv.lan, promotion: promo }, moveIndex, soundType)
                   } else {
-                    console.error(`[SF:client][${cid}] move ${data.bestMove} was illegal in position`)
+                    console.error(`[SF:client][${cid}] move ${data.bestMove} returned null | fen: ${fen}`)
                   }
                 } catch (moveErr) {
-                  console.error(`[SF:client][${cid}] move threw:`, moveErr)
+                  console.error(`[SF:client][${cid}] move threw: ${data.bestMove} | fen: ${fen} |`, moveErr)
+                }
+                if (!moveOk && aiRetryCountRef.current < 3) {
+                  aiRetryCountRef.current++
+                  console.warn(`[SF:client][${cid}] AI move failed — scheduling retry ${aiRetryCountRef.current}/3`)
+                  setEngineRetryKey((k) => k + 1)
                 }
               } else if (isAiTurn && controller.signal.aborted) {
                 console.warn(`[SF:client][${cid}] AI bestmove arrived but signal already aborted — discarding`)
@@ -407,9 +419,11 @@ export default function ChessApp() {
     // When navigating history (undo/redo), run analysis only — never trigger AI move
     const effectiveMode = isNavigatingRef.current ? 'analysis' : gameMode
     isNavigatingRef.current = false
+    // Reset retry counter whenever we fire a fresh engine call driven by a real state change
+    if (engineRetryKey === 0) aiRetryCountRef.current = 0
     callEngine(currentFen, effectiveMode, engineSettings, playerColor, currentMoveIndex)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentFen, gameMode, engineSettings, playerColor, showHints])
+  }, [currentFen, gameMode, engineSettings, playerColor, showHints, engineRetryKey])
 
   const computeBadge = (
     before: EngineInfo['score'],

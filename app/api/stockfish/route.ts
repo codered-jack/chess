@@ -6,6 +6,12 @@ export const dynamic = 'force-dynamic'
 
 const externalBase = process.env.ENGINE_API_URL?.replace(/\/+$/, '')
 
+// Mutex: ensures only one GET request runs the engine at a time on this instance.
+// Without this, two concurrent requests can both resolve from the same "readyok"
+// and both register bestmove listeners, causing the second one to receive the
+// first one's bestmove (wrong position) and the real analysis to go unheard.
+let requestChain: Promise<void> = Promise.resolve()
+
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const { action, options } = body
@@ -63,6 +69,15 @@ export async function GET(req: NextRequest) {
 
   const reqId = Math.random().toString(36).slice(2, 7)
 
+  // Acquire the per-instance mutex — wait for the previous request to fully finish
+  // (either bestmove received or client disconnected) before starting this one.
+  const myTurn = requestChain
+  let releaseLock!: () => void
+  requestChain = new Promise<void>((resolve) => { releaseLock = resolve })
+  console.log(`[SF:route][${reqId}] waiting for lock`)
+  await myTurn
+  console.log(`[SF:route][${reqId}] lock acquired`)
+
   const fen = searchParams.get('fen') ?? 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
   const moves = searchParams.get('moves')?.split(',').filter(Boolean) ?? []
   const movetime = parseInt(searchParams.get('movetime') ?? '2000')
@@ -109,11 +124,17 @@ export async function GET(req: NextRequest) {
 
   const encoder = new TextEncoder()
 
-  // Hoisted so cancel() can remove listeners without calling engine.stop().
-  // Calling engine.stop() from cancel() is dangerous: it fires asynchronously
-  // (after the client disconnects) and can emit a premature bestmove that
-  // consumes the *next* request's once-listener before real analysis finishes.
+  // Hoisted so cancel() can remove listeners and release the mutex without
+  // calling engine.stop() (which would race with the next request's listeners).
   let cleanup = () => {}
+  let lockReleased = false
+  const releaseOnce = () => {
+    if (!lockReleased) {
+      lockReleased = true
+      console.log(`[SF:route][${reqId}] releasing lock`)
+      releaseLock()
+    }
+  }
 
   const stream = new ReadableStream({
     start(controller) {
@@ -145,6 +166,7 @@ export async function GET(req: NextRequest) {
           try { controller.close() } catch { /* already closed */ }
           console.log(`[SF:route][${reqId}] stream closed after bestmove`)
         }
+        releaseOnce()
       }
 
       console.log(`[SF:route][${reqId}] registering listeners, calling go (${depth ? `depth ${depth}` : `movetime ${movetime}`})`)
@@ -161,6 +183,7 @@ export async function GET(req: NextRequest) {
       // correct place to stop the engine.
       console.log(`[SF:route][${reqId}] cancel() — client disconnected, removing listeners only`)
       cleanup()
+      releaseOnce()
     },
   })
 
