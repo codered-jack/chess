@@ -234,9 +234,13 @@ export default function ChessApp() {
 
   const callEngine = useCallback(
     async (fen: string, mode: GameMode, settings: typeof engineSettings, pColor: 'w' | 'b', moveIndex: number) => {
+      const cid = Math.random().toString(36).slice(2, 7)
+
       if (engineCallingRef.current) {
+        console.log(`[SF:client][${cid}] previous call running — aborting it`)
         abortRef.current?.abort()
         await new Promise((r) => setTimeout(r, 80))
+        console.log(`[SF:client][${cid}] 80ms wait done, previous call should be cleared`)
       }
 
       const g = new Chess(fen)
@@ -244,6 +248,8 @@ export default function ChessApp() {
 
       const sideToMove = g.turn()
       const isAiTurn = mode === 'vs-ai' && sideToMove !== pColor
+
+      console.log(`[SF:client][${cid}] start mode=${mode} isAiTurn=${isAiTurn} fen=${fen.slice(0, 40)}…`)
 
       // Stockfish always scores from the side-to-move's POV.
       // Normalize to always be from White's POV for the eval bar.
@@ -268,8 +274,12 @@ export default function ChessApp() {
           ...(settings.limitStrength && isAiTurn ? { elo: String(settings.elo) } : {}),
         })
 
+        console.log(`[SF:client][${cid}] fetching /api/stockfish movetime=${params.get('movetime')}`)
         const res = await fetch(`/api/stockfish?${params}`, { signal: controller.signal })
-        if (!res.ok || !res.body) return
+        if (!res.ok || !res.body) {
+          console.error(`[SF:client][${cid}] bad response: status=${res.status}`)
+          return
+        }
 
         const reader = res.body.getReader()
         const decoder = new TextDecoder()
@@ -280,7 +290,10 @@ export default function ChessApp() {
 
         while (true) {
           const { done, value } = await reader.read()
-          if (done) break
+          if (done) {
+            console.log(`[SF:client][${cid}] stream done`)
+            break
+          }
 
           const text = decoder.decode(value)
           const events = text.split('\n\n').filter(Boolean)
@@ -288,6 +301,10 @@ export default function ChessApp() {
           for (const event of events) {
             if (!event.startsWith('data: ')) continue
             const data = JSON.parse(event.slice(6))
+
+            if (data.type === 'error') {
+              console.error(`[SF:client][${cid}] server error:`, data.message)
+            }
 
             if (data.type === 'info') {
               const info = data.info as EngineInfo
@@ -305,7 +322,14 @@ export default function ChessApp() {
               }
             }
 
-            if (data.type === 'bestmove' && data.bestMove && data.bestMove !== '(none)') {
+            if (data.type === 'bestmove') {
+              console.log(`[SF:client][${cid}] bestmove=${data.bestMove} isAiTurn=${isAiTurn} aborted=${controller.signal.aborted}`)
+
+              if (!data.bestMove || data.bestMove === '(none)') {
+                console.warn(`[SF:client][${cid}] bestmove was empty/none — skipping`)
+                continue
+              }
+
               const from = data.bestMove.slice(0, 2) as Square
               const to = data.bestMove.slice(2, 4) as Square
               const promo = data.bestMove[4] as string | undefined
@@ -345,21 +369,33 @@ export default function ChessApp() {
               }
 
               if (isAiTurn && !controller.signal.aborted) {
+                console.log(`[SF:client][${cid}] applying AI move ${data.bestMove}`)
                 const next = new Chess(fen)
                 try {
                   const mv = next.move({ from, to, promotion: promo ?? 'q' })
                   if (mv) {
                     const soundType = getSoundType(next, mv)
                     applyMove(next.fen(), { from, to, san: mv.san, lan: mv.lan, promotion: promo }, moveIndex, soundType)
+                  } else {
+                    console.error(`[SF:client][${cid}] move ${data.bestMove} was illegal in position`)
                   }
-                } catch { /* ignore */ }
+                } catch (moveErr) {
+                  console.error(`[SF:client][${cid}] move threw:`, moveErr)
+                }
+              } else if (isAiTurn && controller.signal.aborted) {
+                console.warn(`[SF:client][${cid}] AI bestmove arrived but signal already aborted — discarding`)
               }
             }
           }
         }
       } catch (e: unknown) {
-        if (e instanceof Error && e.name !== 'AbortError') console.error(e)
+        if (e instanceof Error && e.name === 'AbortError') {
+          console.log(`[SF:client][${cid}] fetch aborted (expected)`)
+        } else {
+          console.error(`[SF:client][${cid}] unexpected error:`, e)
+        }
       } finally {
+        console.log(`[SF:client][${cid}] finally — clearing engineCallingRef`)
         engineCallingRef.current = false
         setIsAnalyzing(false)
       }
@@ -657,6 +693,30 @@ export default function ChessApp() {
   const displayedAnnotations = allAnnotations.slice(0, currentMoveIndex + 1)
   const openingInfo = getOpeningName(displayedHistory)
 
+  // ── Engine health indicator ──
+  const [engineStatus, setEngineStatus] = useState<'unknown' | 'checking' | 'ready' | 'error'>('unknown')
+  const [engineStatusMsg, setEngineStatusMsg] = useState('')
+
+  const checkEngineHealth = useCallback(async () => {
+    setEngineStatus('checking')
+    try {
+      const res = await fetch('/api/stockfish/health', { cache: 'no-store' })
+      const data = await res.json()
+      if (data.ok) {
+        setEngineStatus('ready')
+        setEngineStatusMsg(`${data.backend ?? data.mode ?? 'ok'} · ${data.arch ?? ''}`)
+      } else {
+        setEngineStatus('error')
+        setEngineStatusMsg(data.error ?? `HTTP ${res.status}`)
+      }
+    } catch (e) {
+      setEngineStatus('error')
+      setEngineStatusMsg(e instanceof Error ? e.message : 'Network error')
+    }
+  }, [])
+
+  useEffect(() => { checkEngineHealth() }, [checkEngineHealth])
+
   const showLeftPanel = !boardFullscreen && leftPanelOpen
   const showRightPanel = !boardFullscreen && rightPanelOpen
   // Board size is always fixed, panels overlay not push
@@ -674,6 +734,30 @@ export default function ChessApp() {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          {/* Engine health pill */}
+          <button
+            onClick={checkEngineHealth}
+            disabled={engineStatus === 'checking'}
+            title={engineStatusMsg || 'Click to check engine'}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all border bg-white/5 border-white/8 text-gray-300 hover:bg-white/10 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <span className={`w-2 h-2 rounded-full shrink-0 transition-colors ${
+              engineStatus === 'ready'    ? 'bg-[#86b114]' :
+              engineStatus === 'error'    ? 'bg-red-500' :
+              engineStatus === 'checking' ? 'bg-yellow-400 animate-pulse' :
+              'bg-white/30'
+            }`} />
+            <span className={
+              engineStatus === 'ready' ? 'text-[#86b114]' :
+              engineStatus === 'error' ? 'text-red-400' :
+              'text-gray-400'
+            }>
+              {engineStatus === 'checking' ? 'Checking…' :
+               engineStatus === 'ready'    ? 'Engine ready' :
+               engineStatus === 'error'    ? 'Engine error' :
+               'Engine'}
+            </span>
+          </button>
           <button
             onClick={() => setBoardFullscreen((v) => !v)}
             className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all border bg-white/5 border-white/8 text-gray-300 hover:bg-white/10 hover:text-white"

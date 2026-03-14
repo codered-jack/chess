@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { EngineInfo } from '@/lib/stockfish'
 
 interface EnginePanelProps {
@@ -44,9 +45,32 @@ function Section({ label, children }: { label: string; children: React.ReactNode
   )
 }
 
+type HealthState =
+  | { status: 'idle' }
+  | { status: 'checking' }
+  | { status: 'ok'; backend: string; timestamp: string }
+  | { status: 'error'; message: string; timestamp: string }
+
 export default function EnginePanel({
   isAnalyzing, settings, onSettingsChange, gameMode, onGameModeChange,
 }: EnginePanelProps) {
+  const [health, setHealth] = useState<HealthState>({ status: 'idle' })
+
+  const checkHealth = async () => {
+    setHealth({ status: 'checking' })
+    try {
+      const res = await fetch('/api/stockfish/health', { cache: 'no-store' })
+      const data = await res.json()
+      if (data.ok) {
+        setHealth({ status: 'ok', backend: data.backend ?? data.mode ?? 'unknown', timestamp: data.timestamp })
+      } else {
+        setHealth({ status: 'error', message: data.error ?? `HTTP ${res.status}`, timestamp: data.timestamp ?? new Date().toISOString() })
+      }
+    } catch (e) {
+      setHealth({ status: 'error', message: e instanceof Error ? e.message : 'Network error', timestamp: new Date().toISOString() })
+    }
+  }
+
   return (
     <div className="flex flex-col gap-3">
 
@@ -167,16 +191,48 @@ export default function EnginePanel({
       <div className="border-t border-white/6" />
 
       {/* ── Engine Status ── */}
-      <div className="flex items-center gap-2 py-2.5 px-3 rounded-lg bg-[#262421] border border-white/8">
-        <div className={`w-2.5 h-2.5 rounded-full shrink-0 transition-colors ${
-          isAnalyzing ? 'bg-[#86b114] animate-pulse' : 'bg-white/20'
-        }`} />
-        <div>
-          <p className="text-[12px] font-semibold text-gray-200">
-            {isAnalyzing ? 'Engine thinking…' : 'Engine ready'}
-          </p>
-          <p className="text-[10px] text-gray-600 mt-0.5">Stockfish 18 · Native binary</p>
+      <div className="rounded-lg bg-[#262421] border border-white/8 overflow-hidden">
+        {/* Live status row */}
+        <div className="flex items-center gap-2 py-2.5 px-3">
+          <div className={`w-2.5 h-2.5 rounded-full shrink-0 transition-colors ${
+            isAnalyzing ? 'bg-[#86b114] animate-pulse' : 'bg-white/20'
+          }`} />
+          <div className="flex-1 min-w-0">
+            <p className="text-[12px] font-semibold text-gray-200">
+              {isAnalyzing ? 'Engine thinking…' : 'Engine ready'}
+            </p>
+            <p className="text-[10px] text-gray-600 mt-0.5">Stockfish 18 · WASM / Native</p>
+          </div>
+          <button
+            onClick={checkHealth}
+            disabled={health.status === 'checking'}
+            className="shrink-0 text-[10px] font-semibold px-2 py-1 rounded-md border transition-colors
+              border-white/10 text-gray-400 hover:text-gray-100 hover:border-white/25 hover:bg-white/6
+              disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {health.status === 'checking' ? '…' : 'Ping'}
+          </button>
         </div>
+
+        {/* Health result row — only shown after a ping */}
+        {health.status !== 'idle' && health.status !== 'checking' && (
+          <div className={`px-3 pb-2.5 pt-0 border-t border-white/6 ${
+            health.status === 'ok' ? 'text-[#86b114]' : 'text-red-400'
+          }`}>
+            {health.status === 'ok' ? (
+              <p className="text-[10px] font-medium">
+                Ready · <span className="font-mono">{health.backend}</span>
+                <span className="text-gray-600 ml-1">
+                  {new Date(health.timestamp).toLocaleTimeString()}
+                </span>
+              </p>
+            ) : (
+              <p className="text-[10px] font-medium break-all">
+                {health.message}
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
     </div>

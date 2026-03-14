@@ -106,11 +106,14 @@ class StockfishEngine extends EventEmitter {
     if (!line) return
 
     if (line === 'uciok') {
+      console.log('[SF:engine] recv: uciok — sending isready')
       this.send('isready')
       return
     }
 
     if (line === 'readyok') {
+      const resolverCount = this.readyResolvers.length
+      console.log('[SF:engine] recv: readyok — resolving', resolverCount, 'waiter(s)')
       this.ready = true
       this.readyResolvers.forEach((resolve) => resolve())
       this.readyResolvers = []
@@ -128,6 +131,8 @@ class StockfishEngine extends EventEmitter {
       const parts = line.split(' ')
       const bestMove = parts[1]
       const ponderMove = parts[3] ?? null
+      const listenerCount = this.listenerCount('bestmove')
+      console.log(`[SF:engine] recv: bestmove ${bestMove} | bestmove-listeners: ${listenerCount}`)
       this.emit('bestmove', { bestMove, ponderMove })
       return
     }
@@ -164,17 +169,28 @@ class StockfishEngine extends EventEmitter {
   }
 
   send(cmd: string) {
+    console.log('[SF:engine] send:', cmd)
     if (this.process?.stdin.writable) {
       this.process.stdin.write(cmd + '\n')
+    } else {
+      console.warn('[SF:engine] send skipped — stdin not writable. cmd:', cmd)
     }
   }
 
   waitReady(): Promise<void> {
-    if (this.ready) return Promise.resolve()
-    if (this.failed && this.startError) return Promise.reject(this.startError)
+    if (this.ready) {
+      console.log('[SF:engine] waitReady: already ready, resolving immediately')
+      return Promise.resolve()
+    }
+    if (this.failed && this.startError) {
+      console.error('[SF:engine] waitReady: engine in failed state:', this.startError.message)
+      return Promise.reject(this.startError)
+    }
 
+    console.log('[SF:engine] waitReady: queuing (pending resolvers:', this.readyResolvers.length + 1, ')')
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
+        console.error('[SF:engine] waitReady: TIMED OUT after 15s')
         const err = new Error('Stockfish engine startup timed out')
         this.failed = true
         this.startError = err
@@ -205,6 +221,7 @@ class StockfishEngine extends EventEmitter {
   configure(options: StockfishOptions) {
     // Reset ready so the caller's waitReady() blocks until the engine has processed
     // all setoption commands and the stop's bestmove has already been emitted.
+    console.log('[SF:engine] configure: resetting ready, options:', JSON.stringify(options))
     this.ready = false
     if (options.threads) this.send(`setoption name Threads value ${options.threads}`)
     if (options.hash) this.send(`setoption name Hash value ${options.hash}`)

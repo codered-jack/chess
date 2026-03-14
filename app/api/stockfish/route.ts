@@ -61,6 +61,8 @@ export async function GET(req: NextRequest) {
     })
   }
 
+  const reqId = Math.random().toString(36).slice(2, 7)
+
   const fen = searchParams.get('fen') ?? 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
   const moves = searchParams.get('moves')?.split(',').filter(Boolean) ?? []
   const movetime = parseInt(searchParams.get('movetime') ?? '2000')
@@ -69,29 +71,39 @@ export async function GET(req: NextRequest) {
   const limitStrength = searchParams.get('limitStrength') === 'true'
   const elo = searchParams.get('elo') ? parseInt(searchParams.get('elo')!) : undefined
 
+  console.log(`[SF:route][${reqId}] GET fen=${fen.slice(0, 40)}… movetime=${movetime} multiPV=${multiPV} limitStrength=${limitStrength}${elo ? ` elo=${elo}` : ''}`)
+
   const engine = getEngine()
 
   try {
     if (!engine.isReady()) {
+      console.log(`[SF:route][${reqId}] engine not ready yet — waiting`)
       await engine.waitReady()
+      console.log(`[SF:route][${reqId}] engine became ready`)
+    } else {
+      console.log(`[SF:route][${reqId}] engine already ready`)
     }
   } catch (err) {
-    console.error('[SF] engine failed to become ready:', err)
+    console.error(`[SF:route][${reqId}] engine failed to become ready:`, err)
     return new Response('data: {"type":"error","message":"Engine not ready"}\n\n', {
       status: 503,
       headers: { 'Content-Type': 'text/event-stream' },
     })
   }
 
+  console.log(`[SF:route][${reqId}] sending stop`)
   engine.stop()
 
+  console.log(`[SF:route][${reqId}] configuring (multiPV=${multiPV} limitStrength=${limitStrength})`)
   engine.configure({
     multiPV,
     limitStrength,
     ...(elo ? { elo } : {}),
   })
 
+  console.log(`[SF:route][${reqId}] waiting for configure readyok`)
   await engine.waitReady()
+  console.log(`[SF:route][${reqId}] configure readyok received — setting position`)
 
   engine.setPosition(fen, moves)
 
@@ -108,6 +120,7 @@ export async function GET(req: NextRequest) {
       let closed = false
 
       cleanup = () => {
+        console.log(`[SF:route][${reqId}] cleanup: removing info + bestmove listeners`)
         engine.removeListener('info', onInfo)
         engine.removeListener('bestmove', onBestMove)
       }
@@ -124,14 +137,17 @@ export async function GET(req: NextRequest) {
       }
 
       const onBestMove = ({ bestMove, ponderMove }: { bestMove: string; ponderMove: string | null }) => {
+        console.log(`[SF:route][${reqId}] bestmove received: ${bestMove} (closed=${closed})`)
         safeEnqueue(`data: ${JSON.stringify({ type: 'bestmove', bestMove, ponderMove })}\n\n`)
         if (!closed) {
           closed = true
           cleanup()
           try { controller.close() } catch { /* already closed */ }
+          console.log(`[SF:route][${reqId}] stream closed after bestmove`)
         }
       }
 
+      console.log(`[SF:route][${reqId}] registering listeners, calling go (${depth ? `depth ${depth}` : `movetime ${movetime}`})`)
       engine.on('info', onInfo)
       engine.once('bestmove', onBestMove)
 
@@ -143,6 +159,7 @@ export async function GET(req: NextRequest) {
       // can race with a new request that has already registered its own listeners.
       // The next request's engine.stop() call at the top of the handler is the
       // correct place to stop the engine.
+      console.log(`[SF:route][${reqId}] cancel() — client disconnected, removing listeners only`)
       cleanup()
     },
   })
