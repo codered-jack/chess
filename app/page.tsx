@@ -6,7 +6,7 @@ import ChessBoard from '@/components/ChessBoard'
 import EvalBar from '@/components/EvalBar'
 import MoveHistory from '@/components/MoveHistory'
 import EnginePanel from '@/components/EnginePanel'
-import GameControls from '@/components/GameControls'
+import GameControls, { StatusType } from '@/components/GameControls'
 import { CapturedPiecesRow } from '@/components/CapturedPieces'
 import PlayerClock from '@/components/PlayerClock'
 import ToastContainer, { ToastItem } from '@/components/ToastContainer'
@@ -156,14 +156,25 @@ export default function ChessApp() {
   const isRepetition = !isGameOver && repetitionCount >= 3
 
   const getGameStatus = () => {
-    if (timedOut) return `${timedOut === 'w' ? 'White' : 'Black'} ran out of time - ${timedOut === 'w' ? 'Black' : 'White'} wins`
+    if (timedOut) return `${timedOut === 'w' ? 'White' : 'Black'} ran out of time — ${timedOut === 'w' ? 'Black' : 'White'} wins`
     if (drawAccepted) return 'Draw by agreement'
-    if (resigned) return `${resigned === 'w' ? 'White' : 'Black'} resigned - ${resigned === 'w' ? 'Black' : 'White'} wins`
+    if (resigned) return `${resigned === 'w' ? 'White' : 'Black'} resigned — ${resigned === 'w' ? 'Black' : 'White'} wins`
     if (currentGame.isCheckmate()) return `Checkmate! ${turn === 'w' ? 'Black' : 'White'} wins`
-    if (currentGame.isStalemate()) return 'Stalemate - Draw'
+    if (currentGame.isStalemate()) return 'Stalemate — Draw'
     if (currentGame.isDraw()) return 'Draw'
     if (currentGame.inCheck()) return `${turn === 'w' ? 'White' : 'Black'} is in Check!`
     return `${turn === 'w' ? 'White' : 'Black'} to move`
+  }
+
+  const getStatusType = (): StatusType => {
+    if (timedOut) return 'timeout'
+    if (drawAccepted) return 'draw'
+    if (resigned) return 'resign'
+    if (currentGame.isCheckmate()) return 'checkmate'
+    if (currentGame.isStalemate()) return 'stalemate'
+    if (currentGame.isDraw()) return 'draw'
+    if (currentGame.inCheck()) return 'check'
+    return 'playing'
   }
 
   const applyMove = useCallback(
@@ -244,7 +255,13 @@ export default function ChessApp() {
         console.log(`[SF:client][${cid}] previous call running — aborting it`)
         abortRef.current?.abort()
         await new Promise((r) => setTimeout(r, 80))
-        console.log(`[SF:client][${cid}] 80ms wait done, previous call should be cleared`)
+        // After the wait, if another call already started (e.g. AI move landed while we
+        // were waiting), bail out — that newer call has the correct FEN and should win.
+        if (engineCallingRef.current) {
+          console.log(`[SF:client][${cid}] newer call took over during wait — bailing out`)
+          return
+        }
+        console.log(`[SF:client][${cid}] 80ms wait done, proceeding`)
       }
 
       const g = new Chess(fen)
@@ -734,7 +751,8 @@ export default function ChessApp() {
   const showLeftPanel = !boardFullscreen && leftPanelOpen
   const showRightPanel = !boardFullscreen && rightPanelOpen
   // Board size is always fixed, panels overlay not push
-  const boardWidthForLayout = boardFullscreen ? 'min(80vw, 80vh, 576px)' : 'min(calc(100vh - 116px), calc(100vw - 160px))'
+  // 116px = header; 32px = py-4 top+bottom; 56px = captured rows; pl-4(16)+pr-180+evalbar(~50) = 246px horizontal
+  const boardWidthForLayout = boardFullscreen ? 'min(80vw, 80vh, 576px)' : 'min(calc(100vh - 204px), calc(100vw - 260px))'
 
   return (
     <div className="h-screen bg-[#262421] text-white flex flex-col overflow-hidden">
@@ -826,7 +844,7 @@ export default function ChessApp() {
               Exit Fullscreen
             </button>
           )}
-          <div className={`flex items-center justify-center h-full w-full box-border ${boardFullscreen ? '' : 'gap-8 px-16 py-6'}`}>
+          <div className={`flex items-center justify-center h-full w-full box-border ${boardFullscreen ? '' : 'gap-8 pl-4 pr-[180px] py-4'}`}>
             {/* Eval bar */}
             {!boardFullscreen && (
               <div className="self-stretch py-8 flex flex-col">
@@ -835,7 +853,7 @@ export default function ChessApp() {
             )}
             {/* Board wrapper: fixed size, never shrinks */}
             <div
-              className="relative shrink-0 flex flex-col gap-1"
+              className="relative shrink-0 flex flex-col gap-3"
               style={{ width: boardWidthForLayout, minWidth: '300px' }}
             >
               {/* Opponent row: captured pieces + clock */}
@@ -930,7 +948,7 @@ export default function ChessApp() {
               />
             )}
             <aside
-              className={`absolute top-0 right-0 h-full z-40 flex flex-col bg-[#1a1714] border-l border-white/6 overflow-hidden transition-transform duration-200 w-72 ${showRightPanel ? 'translate-x-0' : 'translate-x-full'}`}
+              className={`absolute top-0 right-0 h-full z-40 flex flex-col bg-[#1a1714] border-l border-white/6 overflow-hidden transition-transform duration-200 w-[380px] ${showRightPanel ? 'translate-x-0' : 'translate-x-full'}`}
             >
               {/* Time control selector */}
               <div className="shrink-0 px-3 py-2 border-b border-white/6 flex items-center gap-1.5">
@@ -970,6 +988,8 @@ export default function ChessApp() {
                   playerColor={playerColor}
                   onPlayerColorChange={handlePlayerColorChange}
                   gameStatus={getGameStatus()}
+                  statusType={getStatusType()}
+                  turn={turn}
                 />
               </div>
               <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
@@ -987,7 +1007,7 @@ export default function ChessApp() {
               onClick={() => setRightPanelOpen((v) => !v)}
               aria-label={showRightPanel ? 'Collapse controls panel' : 'Expand controls panel'}
               className="absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-5 h-12 bg-[#1a1714] border border-white/10 rounded-l-lg hover:bg-[#2a2520] transition-all"
-              style={{ right: showRightPanel ? '288px' : '0px', transition: 'right 200ms' }}
+              style={{ right: showRightPanel ? '380px' : '0px', transition: 'right 200ms' }}
             >
               <svg width="10" height="14" viewBox="0 0 10 14" fill="none" className="text-gray-400">
                 {showRightPanel
