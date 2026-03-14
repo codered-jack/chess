@@ -7,6 +7,7 @@ interface OnlineLobbyProps {
   playerColor: 'w' | 'b'
   timeControl: number | null
   onTimeControlChange: (seconds: number | null) => void
+  onColorChange: (color: 'w' | 'b') => void
   onCancel: () => void
 }
 
@@ -17,7 +18,7 @@ const TIME_OPTIONS: { label: string; value: number | null }[] = [
   { label: '15 min', value: 15 * 60 },
 ]
 
-export default function OnlineLobby({ roomUrl, playerColor, timeControl, onTimeControlChange, onCancel }: OnlineLobbyProps) {
+export default function OnlineLobby({ roomUrl, playerColor, timeControl, onTimeControlChange, onColorChange, onCancel }: OnlineLobbyProps) {
   const [copied, setCopied] = useState(false)
 
   const handleCopy = async () => {
@@ -52,9 +53,29 @@ export default function OnlineLobby({ roomUrl, playerColor, timeControl, onTimeC
         {/* Status */}
         <div className="text-center">
           <p className="text-white font-bold text-lg">Waiting for opponent…</p>
-          <p className="text-gray-400 text-sm mt-1">
-            You are playing as <span className="text-[#86b114] font-semibold">{playerColor === 'w' ? 'White' : 'Black'}</span>
-          </p>
+        </div>
+
+        {/* Color picker */}
+        <div className="w-full">
+          <p className="text-[11px] text-gray-500 uppercase font-bold tracking-wide mb-2">Play as</p>
+          <div className="grid grid-cols-2 gap-2">
+            {(['w', 'b'] as const).map((c) => (
+              <button
+                key={c}
+                onClick={() => onColorChange(c)}
+                className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-semibold transition-all border ${
+                  playerColor === c
+                    ? 'bg-[#86b114]/20 border-[#86b114]/50 text-[#86b114]'
+                    : c === 'w'
+                      ? 'bg-white/5 border-white/10 text-gray-300 hover:bg-white/10 hover:text-white'
+                      : 'bg-black/30 border-white/10 text-gray-400 hover:bg-black/50 hover:text-gray-200'
+                }`}
+              >
+                <span className="text-base leading-none">{c === 'w' ? '♔' : '♚'}</span>
+                {c === 'w' ? 'White' : 'Black'}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Timer selector */}

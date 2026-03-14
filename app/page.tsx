@@ -700,6 +700,13 @@ export default function ChessApp() {
         return
       }
 
+      if (msg.type === 'color-update') {
+        setOnlineColor(msg.yourColor)
+        setFlipped(msg.yourColor === 'b')
+        setPlayerColor(msg.yourColor)
+        return
+      }
+
       if (msg.type === 'draw-offer') {
         setOnlineDrawOffered(true)
         setShowDrawOfferModal(true)
@@ -911,8 +918,13 @@ export default function ChessApp() {
 
   const handleNewGame = () => {
     if (gameMode === 'two-player' && onlineRoomId) {
-      // Close modal immediately for good UX; full board reset comes from server broadcast
+      // Clear all game-over causes immediately so the 600ms modal-re-open effect
+      // doesn't fire (it watches isGameOver, which depends on these values).
+      // Full board reset happens when the server broadcasts 'new-game' back.
       setShowGameOverModal(false)
+      setResigned(null)
+      setTimedOut(null)
+      setDrawAccepted(false)
       sendOnlineMessage({ type: 'new-game' })
       return
     }
@@ -1130,6 +1142,7 @@ export default function ChessApp() {
           playerColor={onlineColor}
           timeControl={timeControl}
           onTimeControlChange={handleTimeControlChange}
+          onColorChange={(color) => sendOnlineMessage({ type: 'set-color', color })}
           onCancel={() => { resetOnlineState(); setGameMode('vs-ai') }}
         />
       )}
@@ -1341,6 +1354,7 @@ export default function ChessApp() {
                   gameStatus={getGameStatus()}
                   statusType={getStatusType()}
                   turn={turn}
+                  isOnline={!!(gameMode === 'two-player' && onlineRoomId)}
                 />
               </div>
               <div className="flex-1 min-h-0 flex flex-col overflow-hidden">

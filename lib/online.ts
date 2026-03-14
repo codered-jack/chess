@@ -18,6 +18,7 @@ export type ClientDrawAccept = { type: 'draw-accept' }
 export type ClientSetTimeControl = { type: 'set-time-control'; seconds: number | null }
 export type ClientFlag = { type: 'flag' }  // sent when client clock hits 0
 export type ClientNewGame = { type: 'new-game' }
+export type ClientSetColor = { type: 'set-color'; color: PlayerColor }
 
 export type ClientMessage =
   | ClientMove
@@ -27,6 +28,7 @@ export type ClientMessage =
   | ClientSetTimeControl
   | ClientFlag
   | ClientNewGame
+  | ClientSetColor
 
 // ── Messages sent from Server → Client ──────────────────────────────────────
 
@@ -85,6 +87,11 @@ export type ServerNewGame = {
   blackTime: number
 }
 
+export type ServerColorUpdate = {
+  type: 'color-update'
+  yourColor: PlayerColor
+}
+
 export type ServerMessage =
   | ServerWelcome
   | ServerOpponentJoined
@@ -95,3 +102,4 @@ export type ServerMessage =
   | ServerError
   | ServerTimeControlSet
   | ServerNewGame
+  | ServerColorUpdate

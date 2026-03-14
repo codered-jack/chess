@@ -25,6 +25,7 @@ interface GameControlsProps {
   gameStatus: string
   statusType: StatusType
   turn: 'w' | 'b'
+  isOnline?: boolean
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -52,7 +53,7 @@ const STATUS_CONFIG: Record<StatusType, {
 export default function GameControls({
   canUndo, canRedo, canResign, canOfferDraw, onFlip, onUndo, onRedo, onNewGame, onResign, onDrawOffer,
   onExportPGN, onImportPGN, onCopyFEN, onPasteFEN,
-  playerColor, onPlayerColorChange, gameStatus, statusType, turn,
+  playerColor, onPlayerColorChange, gameStatus, statusType, turn, isOnline = false,
 }: GameControlsProps) {
   const pgnInputRef = useRef<HTMLInputElement>(null)
   const compactButtonClass =
@@ -104,29 +105,30 @@ export default function GameControls({
         )}
       </div>
 
-      {/* Play as */}
-      <div>
-        <SectionLabel>Play as</SectionLabel>
-        <div className="grid grid-cols-2 gap-2">
-          {(['w', 'b'] as const).map((color) => (
-            // Keep explicit visual themes for white/black, both on hover and selected.
-            <button
-              key={color}
-              onClick={() => onPlayerColorChange(color)}
-              className={`py-1.5 px-2 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1 transition-all border ${
-                playerColor === color
-                  ? 'bg-[#86b114] text-white border-[#a2d220] shadow-lg shadow-[#86b114]/30'
-                  : color === 'w'
-                    ? 'bg-white/5 text-gray-300 border-white/15 hover:bg-white/15 hover:text-white hover:border-white/30'
-                    : 'bg-[#1a1a1a] text-gray-400 border-white/10 hover:bg-[#232323] hover:text-gray-200 hover:border-white/25'
-              }`}
-            >
-              <span className="text-[10px] leading-none">{color === 'w' ? '♔' : '♚'}</span>
-              {color === 'w' ? 'White' : 'Black'}
-            </button>
-          ))}
+      {/* Play as — hidden in online mode (color is chosen in lobby / swaps on rematch) */}
+      {!isOnline && (
+        <div>
+          <SectionLabel>Play as</SectionLabel>
+          <div className="grid grid-cols-2 gap-2">
+            {(['w', 'b'] as const).map((color) => (
+              <button
+                key={color}
+                onClick={() => onPlayerColorChange(color)}
+                className={`py-1.5 px-2 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1 transition-all border ${
+                  playerColor === color
+                    ? 'bg-[#86b114] text-white border-[#a2d220] shadow-lg shadow-[#86b114]/30'
+                    : color === 'w'
+                      ? 'bg-white/5 text-gray-300 border-white/15 hover:bg-white/15 hover:text-white hover:border-white/30'
+                      : 'bg-[#1a1a1a] text-gray-400 border-white/10 hover:bg-[#232323] hover:text-gray-200 hover:border-white/25'
+                }`}
+              >
+                <span className="text-[10px] leading-none">{color === 'w' ? '♔' : '♚'}</span>
+                {color === 'w' ? 'White' : 'Black'}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Game controls */}
       <div>

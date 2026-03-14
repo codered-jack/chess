@@ -7,6 +7,7 @@ import type {
   OnlineMove,
   ServerTimeControlSet,
   ServerNewGame,
+  ServerColorUpdate,
 } from '../lib/online'
 
 type ConnState = { color: PlayerColor }
@@ -77,6 +78,18 @@ export default class ChessRoom implements Party.Server {
     if (connId === this.whiteId) return 'w'
     if (connId === this.blackId) return 'b'
     return null
+  }
+
+  /** Notify each connected player of their current color assignment. */
+  private notifyColors() {
+    if (this.whiteId) {
+      const c = this.room.getConnection(this.whiteId)
+      if (c) send(c, { type: 'color-update', yourColor: 'w' } as ServerColorUpdate)
+    }
+    if (this.blackId) {
+      const c = this.room.getConnection(this.blackId)
+      if (c) send(c, { type: 'color-update', yourColor: 'b' } as ServerColorUpdate)
+    }
   }
 
   // Deduct elapsed time from the player who just moved. Returns true if they timed out.
@@ -259,12 +272,25 @@ export default class ChessRoom implements Party.Server {
       return
     }
 
+    // ── Color preference (lobby only, before first move) ─────────────────────
+    if (msg.type === 'set-color') {
+      if (this.moves.length > 0) return // cannot change color mid-game
+      if (senderColor === msg.color) return // already that color — nothing to do
+      // Swap the two slot IDs so sender ends up with their preferred color
+      ;[this.whiteId, this.blackId] = [this.blackId, this.whiteId]
+      await this.persist()
+      this.notifyColors()
+      return
+    }
+
     // ── New game (rematch in same room) ──────────────────────────────────────
     if (msg.type === 'new-game') {
       // Both players must be present to start a rematch
       if (!this.whiteId || !this.blackId) {
         send(sender, { type: 'error', message: 'Opponent is not connected' }); return
       }
+      // Auto-swap colors for the rematch
+      ;[this.whiteId, this.blackId] = [this.blackId, this.whiteId]
       this.game         = new Chess()
       this.moves        = []
       this.drawOfferedBy = null
@@ -279,6 +305,8 @@ export default class ChessRoom implements Party.Server {
         blackTime:   this.blackTime,
       }
       broadcast(this.room, ngMsg)
+      // Tell each player their new color
+      this.notifyColors()
       return
     }
 
