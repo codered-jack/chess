@@ -25,6 +25,7 @@ export default function ChessApp() {
   const [gameMode, setGameMode] = useState<GameMode>('vs-ai')
   const [showHints, setShowHints] = useState(true)
   const [soundEnabled, setSoundEnabled] = useState(true)
+  const [boardFullscreen, setBoardFullscreen] = useState(false)
 
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
   const [legalMoves, setLegalMoves] = useState<Square[]>([])
@@ -146,6 +147,15 @@ export default function ChessApp() {
       }
     }
   }, [])
+
+  useEffect(() => {
+    if (!boardFullscreen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setBoardFullscreen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [boardFullscreen])
 
   const callEngine = useCallback(
     async (fen: string, mode: GameMode, settings: typeof engineSettings, pColor: 'w' | 'b', moveIndex: number) => {
@@ -393,7 +403,7 @@ export default function ChessApp() {
     <div className="h-screen bg-[#262421] text-white flex flex-col overflow-hidden">
 
       {/* ── Header ── */}
-      <header className="shrink-0 h-14 px-6 flex items-center gap-4 bg-[#1a1714] border-b border-white/6">
+      <header className={`${boardFullscreen ? 'hidden' : 'shrink-0 h-14 px-6 flex items-center gap-4 bg-[#1a1714] border-b border-white/6'}`}>
         <div className="flex items-center gap-2.5">
           <span className="text-2xl leading-none">♟</span>
           <span className="text-base font-bold text-white tracking-tight">Chess</span>
@@ -401,6 +411,12 @@ export default function ChessApp() {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={() => setBoardFullscreen((v) => !v)}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all border bg-white/5 border-white/8 text-gray-300 hover:bg-white/10 hover:text-white"
+          >
+            {boardFullscreen ? 'Exit Fullscreen' : 'Fullscreen Board'}
+          </button>
           <button
             onClick={() => setSoundEnabled((v) => !v)}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all border ${
@@ -440,7 +456,7 @@ export default function ChessApp() {
       <div className="flex-1 flex min-h-0">
 
         {/* ── Left panel — Engine ── */}
-        <aside className="w-72 shrink-0 flex flex-col bg-[#1a1714] border-r border-white/6 overflow-y-auto">
+        <aside className={`${boardFullscreen ? 'hidden' : 'w-72 shrink-0 flex flex-col bg-[#1a1714] border-r border-white/6 overflow-y-auto'}`}>
           <div className="p-4">
             <EnginePanel
               engineLines={engineLines}
@@ -454,21 +470,30 @@ export default function ChessApp() {
         </aside>
 
         {/* ── Center — Board ── */}
-        <main className="flex-1 flex items-center justify-center min-h-0 min-w-0 bg-[#262421]">
-          <div className="flex items-center gap-6 px-6 py-6 h-full box-border">
+        <main className={`relative flex-1 flex items-center justify-center min-h-0 min-w-0 ${boardFullscreen ? 'bg-[#151311] p-2' : 'bg-[#262421]'}`}>
+          {boardFullscreen && (
+            <button
+              onClick={() => setBoardFullscreen(false)}
+              className="absolute top-3 right-3 z-40 px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-black/45 border border-white/15 text-gray-200 hover:bg-black/65 hover:text-white transition-all"
+            >
+              Exit Fullscreen
+            </button>
+          )}
+          <div className={`flex items-center h-full box-border ${boardFullscreen ? '' : 'gap-6 px-6 py-6'}`}>
 
             {/* Eval bar */}
-            <div className="self-stretch py-8 flex flex-col">
-              <EvalBar score={latestScore} flipped={flipped} turn={turn} />
-            </div>
+            {!boardFullscreen && (
+              <div className="self-stretch py-8 flex flex-col">
+                <EvalBar score={latestScore} flipped={flipped} turn={turn} />
+              </div>
+            )}
 
             {/* Board wrapper — always a perfect square */}
             <div
               className="relative"
               style={{
-                /* 56px header, tighter center padding, 2×288px side panels */
-                width:  'min(calc(100vh - 108px), calc(100vw - 812px))',
-                height: 'min(calc(100vh - 108px), calc(100vw - 812px))',
+                width: boardFullscreen ? 'min(96vw, 96vh)' : 'min(calc(100vh - 108px), calc(100vw - 812px))',
+                height: boardFullscreen ? 'min(96vw, 96vh)' : 'min(calc(100vh - 108px), calc(100vw - 812px))',
                 minWidth:  '300px',
                 minHeight: '300px',
               }}
@@ -491,7 +516,7 @@ export default function ChessApp() {
         </main>
 
         {/* ── Right panel — Controls + History ── */}
-        <aside className="w-72 shrink-0 flex flex-col bg-[#1a1714] border-l border-white/6 overflow-hidden">
+        <aside className={`${boardFullscreen ? 'hidden' : 'w-72 shrink-0 flex flex-col bg-[#1a1714] border-l border-white/6 overflow-hidden'}`}>
 
           {/* Controls section */}
           <div className="shrink-0 p-3 border-b border-white/6">
