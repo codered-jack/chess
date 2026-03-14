@@ -71,8 +71,16 @@ export async function GET(req: NextRequest) {
 
   const engine = getEngine()
 
-  if (!engine.isReady()) {
-    await engine.waitReady()
+  try {
+    if (!engine.isReady()) {
+      await engine.waitReady()
+    }
+  } catch (err) {
+    console.error('[SF] engine failed to become ready:', err)
+    return new Response('data: {"type":"error","message":"Engine not ready"}\n\n', {
+      status: 503,
+      headers: { 'Content-Type': 'text/event-stream' },
+    })
   }
 
   engine.stop()

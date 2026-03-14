@@ -274,6 +274,9 @@ export default function ChessApp() {
         const reader = res.body.getReader()
         const decoder = new TextDecoder()
         const lineBuffer: EngineInfo[] = []
+        // Track the latest score from info events locally so badge computation
+        // works even when bestmove arrives without preceding info (WASM edge case)
+        let latestLocalScore: EngineInfo['score'] | null = null
 
         while (true) {
           const { done, value } = await reader.read()
@@ -289,6 +292,7 @@ export default function ChessApp() {
             if (data.type === 'info') {
               const info = data.info as EngineInfo
               lineBuffer[info.multipv - 1] = info
+              if (info.multipv === 1) latestLocalScore = info.score
               setEngineLines([...lineBuffer.filter(Boolean)])
               // Only update score on deeper analysis to avoid flicker
               if (lineBuffer[0] && info.multipv === 1 && info.depth >= 8) {
@@ -306,9 +310,10 @@ export default function ChessApp() {
               const to = data.bestMove.slice(2, 4) as Square
               const promo = data.bestMove[4] as string | undefined
 
+              // Use lineBuffer[0] first, fall back to latestLocalScore
+              const rawFinalScore = lineBuffer[0]?.score ?? latestLocalScore
               setBestMoveArrow([{ from, to, color: 'rgba(255, 170, 0, 0.85)' }])
-              // Update score immediately on final bestmove
-              if (lineBuffer[0]) updateScore(toWhitePov(lineBuffer[0].score), true)
+              if (rawFinalScore) updateScore(toWhitePov(rawFinalScore), true)
 
               // Only update the suggestion ref when it's for the human's turn,
               // so the AI's own bestmove never overwrites what the human should play
@@ -316,9 +321,9 @@ export default function ChessApp() {
 
               // Annotate the human move using the stored target index (not moveIndex,
               // which could be the AI's later move in vs-ai mode)
-              if (!isAiTurn && evalBeforeRef.current && lineBuffer[0] &&
+              if (!isAiTurn && evalBeforeRef.current && rawFinalScore &&
                   annotationTargetIdxRef.current >= 0) {
-                const finalScore = toWhitePov(lineBuffer[0].score)
+                const finalScore = toWhitePov(rawFinalScore)
                 const sideWhoMoved: 'w' | 'b' = sideToMove === 'w' ? 'b' : 'w'
                 const badge = computeBadge(
                   evalBeforeRef.current,
@@ -363,7 +368,10 @@ export default function ChessApp() {
   )
 
   useEffect(() => {
-    callEngine(currentFen, gameMode, engineSettings, playerColor, currentMoveIndex)
+    // When navigating history (undo/redo), run analysis only — never trigger AI move
+    const effectiveMode = isNavigatingRef.current ? 'analysis' : gameMode
+    isNavigatingRef.current = false
+    callEngine(currentFen, effectiveMode, engineSettings, playerColor, currentMoveIndex)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentFen, gameMode, engineSettings, playerColor, showHints])
 
