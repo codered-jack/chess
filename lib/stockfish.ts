@@ -30,11 +30,12 @@ class StockfishEngine extends EventEmitter {
   private startError: Error | null = null
   private readyResolvers: Array<() => void> = []
   private readyRejectors: Array<(error: Error) => void> = []
-  private backend: 'native' | 'wasm-node' | null = null
+  private backend: 'native' | 'wasm-node' | 'asm-node' | null = null
 
   start() {
     const nativeBinaryPath = path.join(process.cwd(), 'engines', 'stockfish')
     const forceWasm = process.env.STOCKFISH_FORCE_WASM === '1'
+    const isVercel = process.env.VERCEL === '1'
     const canUseNative = fs.existsSync(nativeBinaryPath) && !forceWasm
 
     if (canUseNative) {
@@ -43,17 +44,21 @@ class StockfishEngine extends EventEmitter {
       console.log('[SF] using native backend:', nativeBinaryPath)
     } else {
       const wasmRepoEntry = path.join(process.cwd(), 'engines', 'wasm', 'stockfish.js')
+      const asmRepoEntry = path.join(process.cwd(), 'engines', 'wasm', 'stockfish-asm.js')
       const wasmNodeBin = path.join(process.cwd(), 'node_modules', 'stockfish', 'bin', 'stockfish.js')
-      const wasmEntry = fs.existsSync(wasmRepoEntry) ? wasmRepoEntry : wasmNodeBin
-      if (!fs.existsSync(wasmEntry)) {
+      const engineEntry = isVercel && fs.existsSync(asmRepoEntry)
+        ? asmRepoEntry
+        : (fs.existsSync(wasmRepoEntry) ? wasmRepoEntry : wasmNodeBin)
+
+      if (!fs.existsSync(engineEntry)) {
         throw new Error('Stockfish WASM fallback not found. Install "stockfish" package.')
       }
-      this.backend = 'wasm-node'
-      this.process = spawn(process.execPath, [wasmEntry], {
+      this.backend = engineEntry.endsWith('stockfish-asm.js') ? 'asm-node' : 'wasm-node'
+      this.process = spawn(process.execPath, [engineEntry], {
         stdio: 'pipe',
-        cwd: path.dirname(wasmEntry),
+        cwd: path.dirname(engineEntry),
       })
-      console.log('[SF] native binary missing; using WASM backend:', wasmEntry)
+      console.log('[SF] native binary missing; using fallback backend:', this.backend, engineEntry)
     }
 
     this.process.stdout.on('data', (data: Buffer) => {
