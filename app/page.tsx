@@ -7,7 +7,11 @@ import EvalBar from '@/components/EvalBar'
 import MoveHistory from '@/components/MoveHistory'
 import EnginePanel from '@/components/EnginePanel'
 import GameControls from '@/components/GameControls'
+import { CapturedPiecesRow } from '@/components/CapturedPieces'
+import PlayerClock from '@/components/PlayerClock'
+import ToastContainer, { ToastItem } from '@/components/ToastContainer'
 import { EngineInfo } from '@/lib/stockfish'
+import { getOpeningName } from '@/lib/openings'
 
 type GameMode = 'analysis' | 'vs-ai' | 'two-player'
 type SoundType = 'move' | 'capture' | 'check' | 'checkmate'
@@ -50,6 +54,7 @@ export default function ChessApp() {
   const [promotionPending, setPromotionPending] = useState<{ from: Square; to: Square } | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const engineCallingRef = useRef(false)
+  const isNavigatingRef = useRef(false)
   const soundPoolRef = useRef<Record<SoundType, HTMLAudioElement | null>>({
     move: null,
     capture: null,
@@ -63,6 +68,7 @@ export default function ChessApp() {
 
   const updateScore = useCallback((score: EngineInfo['score'], immediate = false) => {
     pendingScoreRef.current = score
+    latestScoreRef.current = score
     if (scoreDebounceRef.current) clearTimeout(scoreDebounceRef.current)
     if (immediate) {
       setLatestScore(score)
@@ -89,15 +95,68 @@ export default function ChessApp() {
     void sound.play().catch(() => {})
   }, [soundEnabled])
 
+  const [resigned, setResigned] = useState<'w' | 'b' | null>(null)
+  const [showResignModal, setShowResignModal] = useState(false)
+  const [showGameOverModal, setShowGameOverModal] = useState(false)
+  const [drawAccepted, setDrawAccepted] = useState(false)
+  const [showDrawOfferModal, setShowDrawOfferModal] = useState(false)
+
+  // Timer state
+  const [timeControl, setTimeControl] = useState<number | null>(null) // seconds per player; null = no timer
+  const [whiteTime, setWhiteTime] = useState(0)
+  const [blackTime, setBlackTime] = useState(0)
+  const [timedOut, setTimedOut] = useState<'w' | 'b' | null>(null)
+
+  // Toast notifications
+  const [toasts, setToasts] = useState<ToastItem[]>([])
+  const drawClaimToastId = useRef<string | null>(null)
+
+  const dismissToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id))
+  }, [])
+
+  const showToast = useCallback((toast: Omit<ToastItem, 'id'>, autoCloseMs?: number): string => {
+    const id = Math.random().toString(36).slice(2, 9)
+    setToasts((prev) => [...prev, { ...toast, id }])
+    if (autoCloseMs) setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), autoCloseMs)
+    return id
+  }, [])
+
+  // Move quality annotations: parallel to allMoves
+  const [allAnnotations, setAllAnnotations] = useState<(string | null)[]>([])
+  const evalBeforeRef = useRef<EngineInfo['score'] | null>(null)
+  // Mirror latestScore in a ref so makeMove can read it without a stale closure
+  const latestScoreRef = useRef<EngineInfo['score'] | null>(null)
+  // Track engine's suggestion for the HUMAN's turn (never overwritten by AI bestmoves)
+  const prevBestMoveRef = useRef<string | null>(null)
+  // Snapshot of engine's suggestion at the moment the human moved
+  const capturedEngineBestRef = useRef<string | null>(null)
+  // LAN of the human's actual move for comparison
+  const humanMoveLANRef = useRef<string | null>(null)
+  // Which allMoves index the pending annotation belongs to (human's move, not AI's)
+  const annotationTargetIdxRef = useRef<number>(-1)
+
   const currentFen = allPositions[currentMoveIndex + 1] ?? INITIAL_FEN
   const currentGame = new Chess(currentFen)
-  const isGameOver = currentGame.isGameOver()
+  const isGameOver = currentGame.isGameOver() || resigned !== null || timedOut !== null || drawAccepted
   const turn = currentGame.turn()
   const isAtLatest = currentMoveIndex === allMoves.length - 1
 
+  // 50-move rule and repetition (must be before effects that reference them)
+  const halfMoveClock = parseInt(currentFen.split(' ')[4] ?? '0', 10)
+  const movesUntilFifty = 100 - halfMoveClock
+  const showFiftyMoveWarning = halfMoveClock >= 80 && !isGameOver
+  const positionKey = (fen: string) => fen.split(' ').slice(0, 4).join(' ')
+  const currentKey = positionKey(currentFen)
+  const repetitionCount = allPositions.slice(0, currentMoveIndex + 2).filter((f) => positionKey(f) === currentKey).length
+  const isRepetition = !isGameOver && repetitionCount >= 3
+
   const getGameStatus = () => {
+    if (timedOut) return `${timedOut === 'w' ? 'White' : 'Black'} ran out of time - ${timedOut === 'w' ? 'Black' : 'White'} wins`
+    if (drawAccepted) return 'Draw by agreement'
+    if (resigned) return `${resigned === 'w' ? 'White' : 'Black'} resigned - ${resigned === 'w' ? 'Black' : 'White'} wins`
     if (currentGame.isCheckmate()) return `Checkmate! ${turn === 'w' ? 'Black' : 'White'} wins`
-    if (currentGame.isStalemate()) return 'Stalemate — Draw'
+    if (currentGame.isStalemate()) return 'Stalemate - Draw'
     if (currentGame.isDraw()) return 'Draw'
     if (currentGame.inCheck()) return `${turn === 'w' ? 'White' : 'Black'} is in Check!`
     return `${turn === 'w' ? 'White' : 'Black'} to move`
@@ -113,6 +172,7 @@ export default function ChessApp() {
       playSound(soundType)
       setAllPositions((prev) => [...prev.slice(0, targetMoveIndex + 2), fen])
       setAllMoves((prev) => [...prev.slice(0, targetMoveIndex + 1), moveData])
+      setAllAnnotations((prev) => [...prev.slice(0, targetMoveIndex + 1), null])
       setCurrentMoveIndex(targetMoveIndex + 1)
       setLastMove({ from: moveData.from, to: moveData.to })
       setRedoStack([])
@@ -120,6 +180,9 @@ export default function ChessApp() {
       setLegalMoves([])
       setBestMoveArrow([])
       setPromotionPending(null)
+      setResigned(null)
+      setDrawAccepted(false)
+      setShowGameOverModal(false)
     },
     [playSound]
   )
@@ -151,14 +214,7 @@ export default function ChessApp() {
     }
   }, [])
 
-  useEffect(() => {
-    if (!boardFullscreen) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setBoardFullscreen(false)
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [boardFullscreen])
+  // keyboard shortcuts registered after handleUndo/handleRedo are declared below
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -254,6 +310,35 @@ export default function ChessApp() {
               // Update score immediately on final bestmove
               if (lineBuffer[0]) updateScore(toWhitePov(lineBuffer[0].score), true)
 
+              // Only update the suggestion ref when it's for the human's turn,
+              // so the AI's own bestmove never overwrites what the human should play
+              if (!isAiTurn) prevBestMoveRef.current = data.bestMove
+
+              // Annotate the human move using the stored target index (not moveIndex,
+              // which could be the AI's later move in vs-ai mode)
+              if (!isAiTurn && evalBeforeRef.current && lineBuffer[0] &&
+                  annotationTargetIdxRef.current >= 0) {
+                const finalScore = toWhitePov(lineBuffer[0].score)
+                const sideWhoMoved: 'w' | 'b' = sideToMove === 'w' ? 'b' : 'w'
+                const badge = computeBadge(
+                  evalBeforeRef.current,
+                  finalScore,
+                  sideWhoMoved,
+                  humanMoveLANRef.current,
+                  capturedEngineBestRef.current,
+                )
+                const targetIdx = annotationTargetIdxRef.current
+                setAllAnnotations((prev) => {
+                  const next = [...prev]
+                  next[targetIdx] = badge
+                  return next
+                })
+                evalBeforeRef.current = null
+                capturedEngineBestRef.current = null
+                humanMoveLANRef.current = null
+                annotationTargetIdxRef.current = -1
+              }
+
               if (isAiTurn && !controller.signal.aborted) {
                 const next = new Chess(fen)
                 try {
@@ -282,6 +367,36 @@ export default function ChessApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentFen, gameMode, engineSettings, playerColor, showHints])
 
+  const computeBadge = (
+    before: EngineInfo['score'],
+    after: EngineInfo['score'],
+    sideWhoMoved: 'w' | 'b',
+    humanLAN: string | null,
+    engineLAN: string | null,
+  ): string | null => {
+    const cpVal = (s: EngineInfo['score']) =>
+      s.type === 'mate' ? (s.value > 0 ? 10000 : -10000) : s.value
+    const drop = sideWhoMoved === 'w'
+      ? cpVal(before) - cpVal(after)
+      : cpVal(after) - cpVal(before)
+
+    // Compare from+to only (ignore promotion char for matching)
+    const playedBest = !!engineLAN && !!humanLAN &&
+      humanLAN.slice(0, 4) === engineLAN.slice(0, 4)
+
+    // Negative (bad) moves
+    if (drop >= 200) return '??'   // Blunder
+    if (drop >= 80)  return '?'    // Mistake
+    if (drop >= 30)  return '?!'   // Inaccuracy
+
+    // Acceptable range (drop < 30) — positive annotations
+    if (drop < -50 && !playedBest) return '!!'  // Brilliant: unexpected improvement
+    if (playedBest)                return '!'   // Good: engine's top choice
+    if (drop <= 10 && !playedBest) return '!?'  // Interesting: different but fine
+
+    return null  // Normal move, no annotation
+  }
+
   const makeMove = useCallback(
     (from: Square, to: Square, promotion?: string) => {
       const g = new Chess(currentFen)
@@ -297,6 +412,12 @@ export default function ChessApp() {
         setSelectedSquare(null); setLegalMoves([]); return
       }
       if (!mv) return
+      // Snapshot eval and engine suggestion before move for badge computation
+      evalBeforeRef.current = latestScoreRef.current
+      capturedEngineBestRef.current = prevBestMoveRef.current
+      humanMoveLANRef.current = from + to + (promotion ?? '')
+      // The human's move will land at currentMoveIndex + 1 in allMoves after applyMove
+      annotationTargetIdxRef.current = currentMoveIndex + 1
       const soundType = getSoundType(g, mv)
       applyMove(g.fen(), { from, to, san: mv.san, lan: mv.lan, promotion }, currentMoveIndex, soundType)
     },
@@ -305,7 +426,7 @@ export default function ChessApp() {
 
   const handleSquareClick = useCallback(
     (square: Square) => {
-      if (isGameOver || !isAtLatest) return
+      if (isGameOver) return
       const isPlayerTurn = gameMode === 'two-player' || currentGame.turn() === playerColor
       if (!isPlayerTurn && gameMode === 'vs-ai') return
 
@@ -335,7 +456,6 @@ export default function ChessApp() {
 
   const handleDrop = useCallback(
     (from: Square, to: Square) => {
-      if (!isAtLatest) return
       const isPlayerTurn = gameMode === 'two-player' || currentGame.turn() === playerColor
       if (!isPlayerTurn && gameMode === 'vs-ai') return
       makeMove(from, to)
@@ -343,20 +463,91 @@ export default function ChessApp() {
     [makeMove, currentGame, gameMode, playerColor, isAtLatest]
   )
 
-  const handleUndo = () => {
+  const handleUndo = useCallback(() => {
     if (currentMoveIndex < 0) return
-    setCurrentMoveIndex((i) => i - 1)
-    setRedoStack((s) => [allMoves[currentMoveIndex], ...s])
+    abortRef.current?.abort()
+    isNavigatingRef.current = true
+    const stepsBack = (gameMode === 'vs-ai' && currentMoveIndex >= 1) ? 2 : 1
+    const newIndex = Math.max(-1, currentMoveIndex - stepsBack)
+    const undone = allMoves.slice(newIndex + 1, currentMoveIndex + 1).reverse()
+    setRedoStack((s) => [...undone, ...s])
+    setCurrentMoveIndex(newIndex)
     setSelectedSquare(null); setLegalMoves([]); setBestMoveArrow([])
+    setResigned(null); setTimedOut(null); setShowGameOverModal(false)
+  }, [currentMoveIndex, allMoves, gameMode])
+
+  const handleRedo = useCallback(() => {
+    if (redoStack.length === 0) return
+    abortRef.current?.abort()
+    isNavigatingRef.current = true
+    const stepsForward = (gameMode === 'vs-ai' && redoStack.length >= 2) ? 2 : 1
+    setCurrentMoveIndex((i) => Math.min(allMoves.length - 1, i + stepsForward))
+    setRedoStack((s) => s.slice(stepsForward))
+    setBestMoveArrow([])
+    setResigned(null); setTimedOut(null); setShowGameOverModal(false)
+  }, [redoStack, gameMode, allMoves.length])
+
+  // Countdown timer
+  useEffect(() => {
+    if (!timeControl || isGameOver || !isAtLatest || allMoves.length === 0) return
+    const interval = setInterval(() => {
+      if (turn === 'w') {
+        setWhiteTime((t) => {
+          if (t <= 1) { setTimedOut('w'); return 0 }
+          return t - 1
+        })
+      } else {
+        setBlackTime((t) => {
+          if (t <= 1) { setTimedOut('b'); return 0 }
+          return t - 1
+        })
+      }
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [timeControl, isGameOver, isAtLatest, allMoves.length, turn])
+
+  const handleTimeControlChange = (seconds: number | null) => {
+    setTimeControl(seconds)
+    setWhiteTime(seconds ?? 0)
+    setBlackTime(seconds ?? 0)
+    setTimedOut(null)
   }
 
-  const handleRedo = () => {
-    if (redoStack.length === 0) return
-    const [, ...rest] = redoStack
-    setCurrentMoveIndex((i) => i + 1)
-    setRedoStack(rest)
-    setBestMoveArrow([])
-  }
+  // Draw-claim toast: show when threefold repetition or 50-move rule triggers
+  useEffect(() => {
+    const active = (isRepetition || showFiftyMoveWarning) && !isGameOver
+    if (active && !drawClaimToastId.current) {
+      const msg = isRepetition
+        ? 'Threefold repetition — draw can be claimed'
+        : `50-move rule — draw can be claimed (${movesUntilFifty / 2} moves left)`
+      const id = showToast({ message: msg, type: 'warn', action: { label: 'Claim Draw', onClick: acceptDraw } })
+      drawClaimToastId.current = id
+    } else if (!active && drawClaimToastId.current) {
+      dismissToast(drawClaimToastId.current)
+      drawClaimToastId.current = null
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRepetition, showFiftyMoveWarning, isGameOver])
+
+  useEffect(() => {
+    if (isGameOver && isAtLatest) {
+      const t = setTimeout(() => setShowGameOverModal(true), 600)
+      return () => clearTimeout(t)
+    }
+  }, [isGameOver, isAtLatest])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const tag = (event.target as HTMLElement)?.tagName
+      const isTyping = tag === 'INPUT' || tag === 'TEXTAREA' || (event.target as HTMLElement)?.isContentEditable
+      if (isTyping) return
+      if (event.key === 'Escape') { setBoardFullscreen(false); setShowGameOverModal(false) }
+      if (event.key === 'ArrowLeft') handleUndo()
+      if (event.key === 'ArrowRight') handleRedo()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [handleUndo, handleRedo])
 
   const handleMoveClick = (index: number) => {
     setCurrentMoveIndex(index)
@@ -368,12 +559,47 @@ export default function ChessApp() {
     setAllPositions([INITIAL_FEN]); setAllMoves([]); setCurrentMoveIndex(-1)
     setRedoStack([]); setSelectedSquare(null); setLegalMoves([])
     setLastMove(null); setBestMoveArrow([]); setEngineLines([])
-    setLatestScore(null); setIsAnalyzing(false)
+    setLatestScore(null); setIsAnalyzing(false); setResigned(null); setShowGameOverModal(false)
+    setDrawAccepted(false); setShowDrawOfferModal(false); setAllAnnotations([])
+    setTimedOut(null); setWhiteTime(timeControl ?? 0); setBlackTime(timeControl ?? 0)
   }
+
+  const handleResign = () => {
+    if (isGameOver) return
+    setShowResignModal(true)
+  }
+
+  const confirmResign = () => {
+    setResigned(playerColor)
+    abortRef.current?.abort()
+    setShowResignModal(false)
+  }
+
+  const handleDrawOffer = () => {
+    if (isGameOver) return
+    setShowDrawOfferModal(true)
+  }
+
+  const acceptDraw = useCallback(() => {
+    setDrawAccepted(true)
+    abortRef.current?.abort()
+    setShowDrawOfferModal(false)
+    if (drawClaimToastId.current) {
+      setToasts((prev) => prev.filter((t) => t.id !== drawClaimToastId.current))
+      drawClaimToastId.current = null
+    }
+  }, [])
+
+  const declineDraw = () => setShowDrawOfferModal(false)
 
   const handlePlayerColorChange = (color: 'w' | 'b') => {
     setPlayerColor(color)
     setFlipped(color === 'b')
+  }
+
+  const handleNewGameAs = (color: 'w' | 'b') => {
+    handlePlayerColorChange(color)
+    handleNewGame()
   }
 
   const handleExportPGN = () => {
@@ -405,7 +631,10 @@ export default function ChessApp() {
     } catch { alert('Invalid PGN file') }
   }
 
-  const handleCopyFEN = () => { navigator.clipboard.writeText(currentFen); alert('FEN copied!') }
+  const handleCopyFEN = () => {
+    navigator.clipboard.writeText(currentFen)
+    showToast({ message: 'FEN copied to clipboard', type: 'success' }, 2500)
+  }
 
   const handlePasteFEN = async () => {
     try {
@@ -417,15 +646,13 @@ export default function ChessApp() {
   }
 
   const displayedHistory = allMoves.slice(0, currentMoveIndex + 1).map((m) => m.san)
+  const displayedAnnotations = allAnnotations.slice(0, currentMoveIndex + 1)
+  const openingInfo = getOpeningName(displayedHistory)
+
   const showLeftPanel = !boardFullscreen && leftPanelOpen
   const showRightPanel = !boardFullscreen && rightPanelOpen
-  const boardWidthForLayout = boardFullscreen
-    ? 'min(80vw, 80vh, 576px)'
-    : (showLeftPanel && showRightPanel
-      ? 'min(calc(100vh - 108px), calc(100vw - 812px))'
-      : (showLeftPanel || showRightPanel
-        ? 'min(calc(100vh - 108px), calc(100vw - 524px))'
-        : 'min(calc(100vh - 108px), calc(100vw - 236px))'))
+  // Board size is always fixed, panels overlay not push
+  const boardWidthForLayout = boardFullscreen ? 'min(80vw, 80vh, 576px)' : 'min(calc(100vh - 116px), calc(100vw - 160px))'
 
   return (
     <div className="h-screen bg-[#262421] text-white flex flex-col overflow-hidden">
@@ -460,7 +687,7 @@ export default function ChessApp() {
             onClick={() => {
               setShowHints((v) => {
                 if (v) {
-                  // turning hints OFF — clear any active selection so yellow square disappears too
+                  // turning hints OFF: clear any active selection so yellow square disappears too
                   setSelectedSquare(null)
                   setLegalMoves([])
                   setBestMoveArrow([])
@@ -481,54 +708,10 @@ export default function ChessApp() {
       </header>
 
       {/* ── Main layout ── */}
-      <div className="flex-1 flex min-h-0 relative">
-        {!boardFullscreen && (
-          <>
-            <button
-              onClick={() => setLeftPanelOpen((v) => !v)}
-              aria-label={showLeftPanel ? 'Collapse left panel' : 'Expand left panel'}
-              className="absolute left-3 top-1/2 -translate-y-1/2 z-30 h-8 w-8 rounded-md border border-white/15 bg-black/45 text-gray-200 hover:bg-black/65 hover:text-white text-sm font-bold"
-            >
-              {showLeftPanel ? '<' : '>'}
-            </button>
-            <button
-              onClick={() => setRightPanelOpen((v) => !v)}
-              aria-label={showRightPanel ? 'Collapse right panel' : 'Expand right panel'}
-              className="absolute right-3 top-1/2 -translate-y-1/2 z-30 h-8 w-8 rounded-md border border-white/15 bg-black/45 text-gray-200 hover:bg-black/65 hover:text-white text-sm font-bold"
-            >
-              {showRightPanel ? '>' : '<'}
-            </button>
-          </>
-        )}
+      <div className="flex-1 relative min-h-0 overflow-hidden">
 
-        {/* ── Left panel — Engine ── */}
-        <aside className={`${showLeftPanel ? 'relative w-72 shrink-0 flex flex-col bg-[#1a1714] border-r border-white/6 overflow-y-auto' : 'hidden'}`}>
-          {showLeftPanel ? (
-            <div className="p-4">
-              <EnginePanel
-                engineLines={engineLines}
-                isAnalyzing={isAnalyzing}
-                settings={engineSettings}
-                onSettingsChange={(partial) => setEngineSettings((s) => ({ ...s, ...partial }))}
-                gameMode={gameMode}
-                onGameModeChange={(mode) => { setGameMode(mode); setEngineLines([]); setBestMoveArrow([]) }}
-              />
-            </div>
-          ) : (
-            <div className="h-full flex items-start justify-center pt-3">
-              <button
-                onClick={() => setLeftPanelOpen(true)}
-                aria-label="Expand left panel"
-                className="h-7 w-7 rounded-md border border-white/10 bg-white/5 text-gray-300 hover:bg-white/10 hover:text-white text-sm font-bold"
-              >
-                {'>'}
-              </button>
-            </div>
-          )}
-        </aside>
-
-        {/* ── Center — Board ── */}
-        <main className={`relative flex-1 flex items-center justify-center min-h-0 min-w-0 ${boardFullscreen ? 'bg-[#151311] p-6 sm:p-8 md:p-10' : 'bg-[#262421]'}`}>
+        {/* Center: Board (always full area, never pushed) */}
+        <main className={`absolute inset-0 flex items-center justify-center ${boardFullscreen ? 'bg-[#151311] p-6 sm:p-8 md:p-10' : 'bg-[#262421]'}`}>
           {boardFullscreen && (
             <button
               onClick={() => setBoardFullscreen(false)}
@@ -537,55 +720,143 @@ export default function ChessApp() {
               Exit Fullscreen
             </button>
           )}
-          <div className={`flex items-center justify-center h-full w-full box-border ${boardFullscreen ? '' : 'gap-6 px-6 py-6'}`}>
-
+          <div className={`flex items-center justify-center h-full w-full box-border ${boardFullscreen ? '' : 'gap-8 px-16 py-6'}`}>
             {/* Eval bar */}
             {!boardFullscreen && (
               <div className="self-stretch py-8 flex flex-col">
                 <EvalBar score={latestScore} flipped={flipped} turn={turn} />
               </div>
             )}
-
-            {/* Board wrapper — always a perfect square */}
+            {/* Board wrapper: fixed size, never shrinks */}
             <div
-              className="relative"
-              style={{
-                width: boardWidthForLayout,
-                height: boardWidthForLayout,
-                minWidth:  '300px',
-                minHeight: '300px',
-              }}
+              className="relative shrink-0 flex flex-col gap-1"
+              style={{ width: boardWidthForLayout, minWidth: '300px' }}
             >
-              <ChessBoard
-                game={currentGame}
-                flipped={flipped}
-                selectedSquare={selectedSquare}
-                legalMoves={legalMoves}
-                lastMove={lastMove}
-                arrows={showHints ? bestMoveArrow : []}
-                onSquareClick={handleSquareClick}
-                onDrop={handleDrop}
-                playerColor={playerColor}
-                disabled={!isAtLatest || isGameOver}
-                showHints={showHints}
-              />
+              {/* Opponent row: captured pieces + clock */}
+              {!boardFullscreen && (
+                <div className="flex items-center justify-between gap-2">
+                  <CapturedPiecesRow game={currentGame} flipped={flipped} position="top" />
+                  <PlayerClock
+                    seconds={flipped ? whiteTime : blackTime}
+                    isActive={isAtLatest && !isGameOver && (flipped ? turn === 'w' : turn === 'b')}
+                    hasTimer={timeControl !== null}
+                  />
+                </div>
+              )}
+              <div style={{ height: boardWidthForLayout, minHeight: '300px' }} className="relative">
+                <ChessBoard
+                  game={currentGame}
+                  flipped={flipped}
+                  selectedSquare={selectedSquare}
+                  legalMoves={legalMoves}
+                  lastMove={lastMove}
+                  arrows={showHints ? bestMoveArrow : []}
+                  onSquareClick={handleSquareClick}
+                  onDrop={handleDrop}
+                  playerColor={playerColor}
+                  disabled={isGameOver}
+                  showHints={showHints}
+                />
+              </div>
+              {/* Player row: captured pieces + clock */}
+              {!boardFullscreen && (
+                <div className="flex items-center justify-between gap-2">
+                  <CapturedPiecesRow game={currentGame} flipped={flipped} position="bottom" />
+                  <PlayerClock
+                    seconds={flipped ? blackTime : whiteTime}
+                    isActive={isAtLatest && !isGameOver && (flipped ? turn === 'b' : turn === 'w')}
+                    hasTimer={timeControl !== null}
+                  />
+                </div>
+              )}
             </div>
           </div>
         </main>
 
-        {/* ── Right panel — Controls + History ── */}
-        <aside className={`${showRightPanel ? 'w-72 shrink-0 flex flex-col bg-[#1a1714] border-l border-white/6 overflow-hidden' : 'hidden'}`}>
-          {showRightPanel ? (
-            <>
+        {/* Left panel: overlays board */}
+        {!boardFullscreen && (
+          <>
+            {/* Backdrop when left panel open on narrow screens */}
+            {showLeftPanel && (
+              <div
+                className="absolute inset-0 z-30 bg-black/30 lg:hidden"
+                onClick={() => setLeftPanelOpen(false)}
+              />
+            )}
+            <aside
+              className={`absolute top-0 left-0 h-full z-40 flex flex-col bg-[#1a1714] border-r border-white/6 overflow-y-auto transition-transform duration-200 w-72 ${showLeftPanel ? 'translate-x-0' : '-translate-x-full'}`}
+            >
+              <div className="p-4">
+                <EnginePanel
+                  engineLines={engineLines}
+                  isAnalyzing={isAnalyzing}
+                  settings={engineSettings}
+                  onSettingsChange={(partial) => setEngineSettings((s) => ({ ...s, ...partial }))}
+                  gameMode={gameMode}
+                  onGameModeChange={(mode) => { setGameMode(mode); setEngineLines([]); setBestMoveArrow([]) }}
+                />
+              </div>
+            </aside>
+            {/* Left toggle tab: pinned to panel edge */}
+            <button
+              onClick={() => setLeftPanelOpen((v) => !v)}
+              aria-label={showLeftPanel ? 'Collapse engine panel' : 'Expand engine panel'}
+              className="absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-5 h-12 bg-[#1a1714] border border-white/10 rounded-r-lg hover:bg-[#2a2520] transition-all"
+              style={{ left: showLeftPanel ? '288px' : '0px', transition: 'left 200ms' }}
+            >
+              <svg width="10" height="14" viewBox="0 0 10 14" fill="none" className="text-gray-400">
+                {showLeftPanel
+                  ? <path d="M7 1L2 7L7 13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                  : <path d="M3 1L8 7L3 13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                }
+              </svg>
+            </button>
+          </>
+        )}
+
+        {/* Right panel: overlays board */}
+        {!boardFullscreen && (
+          <>
+            {showRightPanel && (
+              <div
+                className="absolute inset-0 z-30 bg-black/30 lg:hidden"
+                onClick={() => setRightPanelOpen(false)}
+              />
+            )}
+            <aside
+              className={`absolute top-0 right-0 h-full z-40 flex flex-col bg-[#1a1714] border-l border-white/6 overflow-hidden transition-transform duration-200 w-72 ${showRightPanel ? 'translate-x-0' : 'translate-x-full'}`}
+            >
+              {/* Time control selector */}
+              <div className="shrink-0 px-3 py-2 border-b border-white/6 flex items-center gap-1.5">
+                <span className="text-[11px] text-gray-500 font-semibold shrink-0">Timer</span>
+                {([null, 5 * 60, 10 * 60, 15 * 60] as (number | null)[]).map((tc) => (
+                  <button
+                    key={tc ?? 'off'}
+                    onClick={() => handleTimeControlChange(tc)}
+                    className={`flex-1 py-1 rounded text-[11px] font-semibold transition-all border ${
+                      timeControl === tc
+                        ? 'bg-[#86b114]/20 border-[#86b114]/40 text-[#86b114]'
+                        : 'bg-white/5 border-white/8 text-gray-400 hover:bg-white/10 hover:text-gray-200'
+                    }`}
+                  >
+                    {tc === null ? 'Off' : `${tc / 60}m`}
+                  </button>
+                ))}
+              </div>
+
               <div className="shrink-0 p-3 border-b border-white/6">
                 <GameControls
                   flipped={flipped}
                   canUndo={currentMoveIndex >= 0}
                   canRedo={redoStack.length > 0}
+                  canResign={!isGameOver && gameMode !== 'analysis'}
+                  canOfferDraw={!isGameOver && gameMode !== 'analysis'}
                   onFlip={() => setFlipped((f) => !f)}
                   onUndo={handleUndo}
                   onRedo={handleRedo}
                   onNewGame={handleNewGame}
+                  onResign={handleResign}
+                  onDrawOffer={handleDrawOffer}
                   onExportPGN={handleExportPGN}
                   onImportPGN={handleImportPGN}
                   onCopyFEN={handleCopyFEN}
@@ -595,30 +866,171 @@ export default function ChessApp() {
                   gameStatus={getGameStatus()}
                 />
               </div>
-
               <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                 <MoveHistory
                   history={displayedHistory}
+                  annotations={displayedAnnotations}
+                  openingInfo={openingInfo}
                   currentMoveIndex={currentMoveIndex}
                   onMoveClick={handleMoveClick}
                 />
               </div>
-            </>
-          ) : (
-            <div className="h-full flex items-start justify-center pt-3">
-              <button
-                onClick={() => setRightPanelOpen(true)}
-                aria-label="Expand right panel"
-                className="h-7 w-7 rounded-md border border-white/10 bg-white/5 text-gray-300 hover:bg-white/10 hover:text-white text-sm font-bold"
-              >
-                {'<'}
-              </button>
-            </div>
-          )}
-        </aside>
+            </aside>
+            {/* Right toggle tab: pinned to panel edge */}
+            <button
+              onClick={() => setRightPanelOpen((v) => !v)}
+              aria-label={showRightPanel ? 'Collapse controls panel' : 'Expand controls panel'}
+              className="absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-5 h-12 bg-[#1a1714] border border-white/10 rounded-l-lg hover:bg-[#2a2520] transition-all"
+              style={{ right: showRightPanel ? '288px' : '0px', transition: 'right 200ms' }}
+            >
+              <svg width="10" height="14" viewBox="0 0 10 14" fill="none" className="text-gray-400">
+                {showRightPanel
+                  ? <path d="M3 1L8 7L3 13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                  : <path d="M7 1L2 7L7 13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                }
+              </svg>
+            </button>
+          </>
+        )}
       </div>
 
-      {/* ── Promotion modal ── */}
+      {/* Game over modal */}
+      {showGameOverModal && isGameOver && (() => {
+        const isCheckmate = currentGame.isCheckmate()
+        const isDraw = !timedOut && !resigned && (drawAccepted || currentGame.isStalemate() || currentGame.isDraw())
+        const winnerColor = timedOut
+          ? (timedOut === 'w' ? 'b' : 'w')
+          : resigned
+            ? (resigned === 'w' ? 'b' : 'w')
+            : isCheckmate
+              ? (turn === 'w' ? 'b' : 'w')
+              : null
+        const emoji = isDraw ? '🤝' : winnerColor === 'w' ? '♔' : '♚'
+        const headline = timedOut
+          ? "Time's Up!"
+          : drawAccepted
+            ? 'Draw Agreed'
+            : resigned
+              ? `${resigned === 'w' ? 'White' : 'Black'} Resigned`
+              : isCheckmate
+                ? 'Checkmate!'
+                : currentGame.isStalemate()
+                  ? 'Stalemate'
+                  : 'Draw'
+        const subline = isDraw
+          ? drawAccepted
+            ? (isRepetition ? 'Draw by threefold repetition' : halfMoveClock >= 100 ? 'Draw by 50-move rule' : 'Both players agreed to a draw')
+            : 'The game is a draw'
+          : timedOut
+            ? `${timedOut === 'w' ? 'White' : 'Black'} ran out of time - ${winnerColor === 'w' ? 'White' : 'Black'} wins`
+            : `${winnerColor === 'w' ? 'White' : 'Black'} wins`
+
+        return (
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-50">
+            <div className="bg-[#1a1714] border border-white/10 rounded-2xl p-8 flex flex-col items-center gap-6 shadow-2xl w-96">
+              <div className="flex flex-col items-center gap-3">
+                <span className="text-5xl">{emoji}</span>
+                <h2 className="text-2xl font-bold text-white tracking-tight">{headline}</h2>
+                <p className="text-sm text-gray-400">{subline}</p>
+              </div>
+
+              <div className="w-full border-t border-white/8 pt-5 flex flex-col gap-3">
+                <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide text-center">Play again as</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => handleNewGameAs('w')}
+                    className="flex flex-col items-center gap-2 py-3 px-4 rounded-xl bg-[#f0ead8] hover:bg-[#fffdf5] border border-[#d4c89a] transition-all"
+                  >
+                    <span className="text-2xl text-[#1a1a1a]">♔</span>
+                    <span className="text-xs font-semibold text-[#2a2a2a]">White</span>
+                  </button>
+                  <button
+                    onClick={() => handleNewGameAs('b')}
+                    className="flex flex-col items-center gap-2 py-3 px-4 rounded-xl bg-[#2c2c2c] hover:bg-[#3a3a3a] border border-[#555] transition-all"
+                  >
+                    <span className="text-2xl text-[#f0f0f0]">♚</span>
+                    <span className="text-xs font-semibold text-[#e0e0e0]">Black</span>
+                  </button>
+                </div>
+                <button
+                  onClick={() => setShowGameOverModal(false)}
+                  className="w-full py-2 px-4 rounded-lg bg-transparent border border-white/8 text-gray-500 hover:text-gray-300 hover:border-white/15 text-xs font-semibold transition-all"
+                >
+                  Review Game
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* Draw offer modal */}
+      {showDrawOfferModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-[#1a1714] border border-white/10 rounded-2xl p-8 flex flex-col items-center gap-6 shadow-2xl w-80">
+            <div className="flex flex-col items-center gap-2">
+              <span className="text-3xl">🤝</span>
+              <h2 className="text-base font-semibold text-gray-100 tracking-wide">
+                {gameMode === 'two-player' ? 'Draw Offered' : 'Claim a Draw?'}
+              </h2>
+              <p className="text-sm text-gray-400 text-center">
+                {gameMode === 'two-player'
+                  ? <><span className="text-white font-semibold">{turn === 'w' ? 'Black' : 'White'}</span>, do you accept the draw?</>
+                  : 'End the game as a draw?'}
+              </p>
+            </div>
+            <div className="flex gap-3 w-full">
+              <button
+                onClick={declineDraw}
+                className="flex-1 py-2 px-4 rounded-lg bg-white/5 border border-white/10 text-gray-300 hover:bg-white/10 hover:text-white text-sm font-semibold transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={acceptDraw}
+                className="flex-1 py-2 px-4 rounded-lg bg-blue-800 hover:bg-blue-700 border border-blue-600/50 text-white text-sm font-semibold transition-all"
+              >
+                {gameMode === 'two-player' ? 'Accept' : 'Draw'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Resign confirmation modal */}
+      {showResignModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-[#1a1714] border border-white/10 rounded-2xl p-8 flex flex-col items-center gap-6 shadow-2xl w-80">
+            <div className="flex flex-col items-center gap-2">
+              <span className="text-3xl">🏳</span>
+              <h2 className="text-base font-semibold text-gray-100 tracking-wide">Resign Game?</h2>
+              <p className="text-sm text-gray-400 text-center">
+                You are resigning as <span className="text-white font-semibold">{playerColor === 'w' ? 'White' : 'Black'}</span>.
+                <br />This cannot be undone.
+              </p>
+            </div>
+            <div className="flex gap-3 w-full">
+              <button
+                onClick={() => setShowResignModal(false)}
+                className="flex-1 py-2 px-4 rounded-lg bg-white/5 border border-white/10 text-gray-300 hover:bg-white/10 hover:text-white text-sm font-semibold transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmResign}
+                className="flex-1 py-2 px-4 rounded-lg bg-red-800 hover:bg-red-700 border border-red-600/50 text-white text-sm font-semibold transition-all"
+              >
+                Resign
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast notifications */}
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+
+      {/* Promotion modal */}
       {promotionPending && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-[#1a1714] border border-white/10 rounded-2xl p-8 flex flex-col items-center gap-6 shadow-2xl">

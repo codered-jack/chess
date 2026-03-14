@@ -6,10 +6,14 @@ interface GameControlsProps {
   flipped: boolean
   canUndo: boolean
   canRedo: boolean
+  canResign: boolean
+  canOfferDraw: boolean
   onFlip: () => void
   onUndo: () => void
   onRedo: () => void
   onNewGame: () => void
+  onResign: () => void
+  onDrawOffer: () => void
   onExportPGN: () => void
   onImportPGN: (pgn: string) => void
   onCopyFEN: () => void
@@ -24,7 +28,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 export default function GameControls({
-  canUndo, canRedo, onFlip, onUndo, onRedo, onNewGame,
+  canUndo, canRedo, canResign, canOfferDraw, onFlip, onUndo, onRedo, onNewGame, onResign, onDrawOffer,
   onExportPGN, onImportPGN, onCopyFEN, onPasteFEN,
   playerColor, onPlayerColorChange, gameStatus,
 }: GameControlsProps) {
@@ -93,6 +97,20 @@ export default function GameControls({
             className="py-1.5 px-2 rounded-lg bg-[#86b114] hover:bg-[#97c815] text-white text-[10px] font-semibold transition-all shadow-lg shadow-[#86b114]/20"
           >
             New Game
+          </button>
+          <button
+            onClick={onDrawOffer}
+            disabled={!canOfferDraw}
+            className="py-1.5 px-2 rounded-lg bg-blue-900/50 hover:bg-blue-800/70 text-blue-300 hover:text-blue-100 text-[10px] font-semibold border border-blue-700/40 hover:border-blue-600/60 transition-all disabled:opacity-25 disabled:cursor-not-allowed"
+          >
+            ½ Draw
+          </button>
+          <button
+            onClick={onResign}
+            disabled={!canResign}
+            className="py-1.5 px-2 rounded-lg bg-red-900/60 hover:bg-red-800/80 text-red-300 hover:text-red-100 text-[10px] font-semibold border border-red-700/40 hover:border-red-600/60 transition-all disabled:opacity-25 disabled:cursor-not-allowed"
+          >
+            🏳 Resign
           </button>
         </div>
       </div>

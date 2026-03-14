@@ -119,8 +119,8 @@ export default function EnginePanel({
                   className="w-full accent-[#86b114] h-2 cursor-pointer"
                 />
                 <div className="flex justify-between mt-2">
-                  <span className="text-xs text-gray-600">500 — Beginner</span>
-                  <span className="text-xs text-gray-600">3500 — SF18</span>
+                  <span className="text-xs text-gray-600">500 Beginner</span>
+                  <span className="text-xs text-gray-600">3500 SF18</span>
                 </div>
               </div>
             ) : (
@@ -158,8 +158,8 @@ export default function EnginePanel({
             className="w-full accent-[#86b114] h-2 cursor-pointer"
           />
           <div className="flex justify-between mt-1.5">
-            <span className="text-[10px] text-gray-600">0.2s — Fast</span>
-            <span className="text-[10px] text-gray-600">10s — Deep</span>
+            <span className="text-[10px] text-gray-600">0.2s Fast</span>
+            <span className="text-[10px] text-gray-600">10s Deep</span>
           </div>
         </div>
       </Section>

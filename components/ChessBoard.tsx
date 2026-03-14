@@ -6,7 +6,6 @@ import { Chess, Square } from 'chess.js'
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
 const RANKS = ['8', '7', '6', '5', '4', '3', '2', '1']
 const BOARD_COLORS = {
-  // Chess.com-like default green board palette.
   light: 'bg-[#eeeed2]',
   dark: 'bg-[#769656]',
   selectedLight: 'bg-[#f6f669]',
@@ -77,6 +76,15 @@ function getSquareFromPoint(
   return (FILES[fileIdx] + (rankIdx + 1)) as Square
 }
 
+function findKingSquare(game: Chess, color: 'w' | 'b'): Square | null {
+  for (const row of game.board()) {
+    for (const cell of row) {
+      if (cell?.type === 'k' && cell.color === color) return cell.square as Square
+    }
+  }
+  return null
+}
+
 export default function ChessBoard({
   game,
   flipped,
@@ -86,7 +94,6 @@ export default function ChessBoard({
   arrows,
   onSquareClick,
   onDrop,
-  playerColor,
   disabled = false,
   showHints = true,
 }: ChessBoardProps) {
@@ -100,6 +107,9 @@ export default function ChessBoard({
 
   const ranks = flipped ? [...RANKS].reverse() : RANKS
   const files = flipped ? [...FILES].reverse() : FILES
+
+  const inCheck = game.inCheck()
+  const checkKingSquare = inCheck ? findKingSquare(game, game.turn()) : null
 
   // Global mouse move and up for drag
   useEffect(() => {
@@ -117,7 +127,6 @@ export default function ChessBoard({
       const toSquare = board ? getSquareFromPoint(board, e.clientX, e.clientY, flipped) : null
       const fromSquare = dragRef.current.fromSquare
 
-      // Clear drag state before calling onDrop so the click handler sees isDraggingRef = false
       isDraggingRef.current = false
       dragRef.current = null
       setDrag(null)
@@ -203,8 +212,6 @@ export default function ChessBoard({
       dragRef.current = state
       isDraggingRef.current = true
       setDrag(state)
-
-      // Select the piece immediately on press
       onSquareClick(square)
     },
     [disabled, onSquareClick]
@@ -217,24 +224,6 @@ export default function ChessBoard({
 
   return (
     <div className="relative select-none" style={{ aspectRatio: '1' }}>
-      {/* Rank labels */}
-      <div className="absolute -left-4 top-0 h-full flex flex-col pointer-events-none">
-        {ranks.map((rank) => (
-          <div key={rank} className="flex-1 flex items-center justify-center text-[11px] font-semibold text-gray-400">
-            {rank}
-          </div>
-        ))}
-      </div>
-
-      {/* File labels */}
-      <div className="absolute -bottom-5 left-0 w-full flex flex-row pointer-events-none">
-        {files.map((file) => (
-          <div key={file} className="flex-1 flex items-center justify-center text-[11px] font-semibold text-gray-400">
-            {file}
-          </div>
-        ))}
-      </div>
-
       {/* Board grid */}
       <div
         ref={boardRef}
@@ -247,6 +236,12 @@ export default function ChessBoard({
             const rankIdx = flipped ? rowIdx : 7 - rowIdx
             const square = (FILES[fileIdx] + (rankIdx + 1)) as Square
 
+            // Inside-board coordinates (Chess.com style)
+            const showRank = colIdx === 0           // leftmost column
+            const showFile = rowIdx === 7           // bottom row
+            const rankLabel = String(rankIdx + 1)
+            const fileLabel = FILES[fileIdx]
+
             const isLight = (rowIdx + colIdx) % 2 === 0
             const isSelected = selectedSquare === square
             const isLegal = legalMoves.includes(square)
@@ -254,6 +249,8 @@ export default function ChessBoard({
             const isLastMoveTo = lastMove?.to === square
             const isDragTarget = hoverSquare === square && isDraggingRef.current
             const isDragSource = drag?.fromSquare === square
+            const isCheckSquare = checkKingSquare === square
+            const isHovered = hoverSquare === square && !isDraggingRef.current && !disabled && !!piece
 
             let squareBg = isLight ? BOARD_COLORS.light : BOARD_COLORS.dark
             if (isSelected || isDragSource) squareBg = isLight ? BOARD_COLORS.selectedLight : BOARD_COLORS.selectedDark
@@ -268,14 +265,30 @@ export default function ChessBoard({
               <div
                 key={square}
                 className={`relative flex items-center justify-center ${squareBg} ${!disabled ? 'cursor-pointer' : ''}`}
+                onMouseEnter={() => { if (!isDraggingRef.current) setHoverSquare(square) }}
+                onMouseLeave={() => { if (!isDraggingRef.current) setHoverSquare(null) }}
                 onClick={() => {
-                  // Only handle click if we are NOT in the middle of a drag
                   if (!isDraggingRef.current && !disabled) {
                     onSquareClick(square)
                   }
                 }}
               >
-                {/* Legal move indicator for selected piece destinations */}
+                {/* Check highlight: red radial glow on king square */}
+                {isCheckSquare && (
+                  <div
+                    className="absolute inset-0 pointer-events-none z-10"
+                    style={{
+                      background: 'radial-gradient(ellipse at center, rgba(220,50,50,0.85) 0%, rgba(180,30,30,0.6) 40%, transparent 75%)',
+                    }}
+                  />
+                )}
+
+                {/* Hover highlight */}
+                {isHovered && (
+                  <div className="absolute inset-0 pointer-events-none z-10 bg-black/10" />
+                )}
+
+                {/* Legal move indicator */}
                 {isLegal && !piece && (
                   <div className="absolute w-[32%] h-[32%] rounded-full pointer-events-none z-20"
                     style={{ background: 'radial-gradient(circle, rgba(0,0,0,0.45) 55%, transparent 55%)' }}
@@ -287,7 +300,27 @@ export default function ChessBoard({
                   />
                 )}
 
-                {/* Piece image — hidden when being dragged */}
+                {/* Inside-board rank number — top-left of leftmost square */}
+                {showRank && (
+                  <span
+                    className="absolute top-[2px] left-[3px] text-[9px] font-bold leading-none pointer-events-none z-25 select-none"
+                    style={{ color: isLight ? '#769656' : '#eeeed2' }}
+                  >
+                    {rankLabel}
+                  </span>
+                )}
+
+                {/* Inside-board file letter — bottom-right of bottom square */}
+                {showFile && (
+                  <span
+                    className="absolute bottom-[2px] right-[3px] text-[9px] font-bold leading-none pointer-events-none z-25 select-none"
+                    style={{ color: isLight ? '#769656' : '#eeeed2' }}
+                  >
+                    {fileLabel}
+                  </span>
+                )}
+
+                {/* Piece image */}
                 {pieceSrc && !isBeingDragged && (
                   <div
                     className="relative w-[90%] h-[90%] z-10 drop-shadow-md"
@@ -322,6 +355,7 @@ export default function ChessBoard({
 
       {/* Floating drag piece */}
       {drag && isDraggingRef.current && (
+        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={drag.pieceSrc}
           alt="dragging"

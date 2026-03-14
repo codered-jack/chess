@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Chess — Stockfish 18",
+  title: "Chess - Stockfish 18",
   description: "Play chess against Stockfish 18, the world's strongest chess engine",
 };
 
