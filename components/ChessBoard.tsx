@@ -5,6 +5,17 @@ import { Chess, Square } from 'chess.js'
 
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
 const RANKS = ['8', '7', '6', '5', '4', '3', '2', '1']
+const BOARD_COLORS = {
+  // Chess.com-like default green board palette.
+  light: 'bg-[#eeeed2]',
+  dark: 'bg-[#769656]',
+  selectedLight: 'bg-[#f6f669]',
+  selectedDark: 'bg-[#baca44]',
+  targetLight: 'bg-[#ecec98]',
+  targetDark: 'bg-[#a7b96b]',
+  lastMoveLight: 'bg-[#f6f669]',
+  lastMoveDark: 'bg-[#baca44]',
+}
 
 const PIECE_MAP: Record<string, string> = {
   wk: 'wK', wq: 'wQ', wr: 'wR', wb: 'wB', wn: 'wN', wp: 'wP',
@@ -244,10 +255,10 @@ export default function ChessBoard({
             const isDragTarget = hoverSquare === square && isDraggingRef.current
             const isDragSource = drag?.fromSquare === square
 
-            let squareBg = isLight ? 'bg-[#f0d9b5]' : 'bg-[#b58863]'
-            if (isSelected || isDragSource) squareBg = isLight ? 'bg-[#f6f669]' : 'bg-[#baca2b]'
-            else if (isDragTarget && isLegal) squareBg = isLight ? 'bg-[#cdd26a]' : 'bg-[#aaa23a]'
-            else if (isLastMoveFrom || isLastMoveTo) squareBg = isLight ? 'bg-[#cdd26a]' : 'bg-[#aaa23a]'
+            let squareBg = isLight ? BOARD_COLORS.light : BOARD_COLORS.dark
+            if (isSelected || isDragSource) squareBg = isLight ? BOARD_COLORS.selectedLight : BOARD_COLORS.selectedDark
+            else if (isDragTarget && isLegal) squareBg = isLight ? BOARD_COLORS.targetLight : BOARD_COLORS.targetDark
+            else if (isLastMoveFrom || isLastMoveTo) squareBg = isLight ? BOARD_COLORS.lastMoveLight : BOARD_COLORS.lastMoveDark
 
             const pieceKey = piece ? `${piece.color}${piece.type}` : null
             const pieceSrc = pieceKey ? `/pieces/${PIECE_MAP[pieceKey]}.svg` : null
@@ -264,13 +275,13 @@ export default function ChessBoard({
                   }
                 }}
               >
-                {/* Legal move indicator — only shown when hints enabled */}
-                {showHints && isLegal && !piece && (
+                {/* Legal move indicator for selected piece destinations */}
+                {isLegal && !piece && (
                   <div className="absolute w-[32%] h-[32%] rounded-full pointer-events-none z-20"
                     style={{ background: 'radial-gradient(circle, rgba(0,0,0,0.45) 55%, transparent 55%)' }}
                   />
                 )}
-                {showHints && isLegal && piece && (
+                {isLegal && piece && (
                   <div className="absolute inset-0 pointer-events-none z-20 rounded-sm"
                     style={{ boxShadow: 'inset 0 0 0 4px rgba(0,0,0,0.5)' }}
                   />

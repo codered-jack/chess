@@ -13,6 +13,7 @@ type GameMode = 'analysis' | 'vs-ai' | 'two-player'
 type SoundType = 'move' | 'capture' | 'check' | 'checkmate'
 
 const INITIAL_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
+const LEFT_PANEL_COLLAPSE_BREAKPOINT = 1380
 
 export default function ChessApp() {
   const [allPositions, setAllPositions] = useState<string[]>([INITIAL_FEN])
@@ -23,9 +24,11 @@ export default function ChessApp() {
   const [flipped, setFlipped] = useState(false)
   const [playerColor, setPlayerColor] = useState<'w' | 'b'>('w')
   const [gameMode, setGameMode] = useState<GameMode>('vs-ai')
-  const [showHints, setShowHints] = useState(true)
+  const [showHints, setShowHints] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(true)
   const [boardFullscreen, setBoardFullscreen] = useState(false)
+  const [leftPanelOpen, setLeftPanelOpen] = useState(false)
+  const [rightPanelOpen, setRightPanelOpen] = useState(true)
 
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
   const [legalMoves, setLegalMoves] = useState<Square[]>([])
@@ -37,7 +40,7 @@ export default function ChessApp() {
   const [isAnalyzing, setIsAnalyzing] = useState(false)
 
   const [engineSettings, setEngineSettings] = useState({
-    movetime: 500,
+    movetime: 1500,
     depth: null as number | null,
     multiPV: 1,
     limitStrength: false,
@@ -157,6 +160,22 @@ export default function ChessApp() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [boardFullscreen])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const onResize = () => {
+      const shouldAutoCollapse = window.innerWidth < LEFT_PANEL_COLLAPSE_BREAKPOINT
+      if (shouldAutoCollapse) {
+        setLeftPanelOpen(false)
+        setRightPanelOpen(false)
+      }
+    }
+
+    onResize()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
   const callEngine = useCallback(
     async (fen: string, mode: GameMode, settings: typeof engineSettings, pColor: 'w' | 'b', moveIndex: number) => {
       if (engineCallingRef.current) {
@@ -261,7 +280,7 @@ export default function ChessApp() {
   useEffect(() => {
     callEngine(currentFen, gameMode, engineSettings, playerColor, currentMoveIndex)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentFen, gameMode, engineSettings, playerColor])
+  }, [currentFen, gameMode, engineSettings, playerColor, showHints])
 
   const makeMove = useCallback(
     (from: Square, to: Square, promotion?: string) => {
@@ -398,6 +417,15 @@ export default function ChessApp() {
   }
 
   const displayedHistory = allMoves.slice(0, currentMoveIndex + 1).map((m) => m.san)
+  const showLeftPanel = !boardFullscreen && leftPanelOpen
+  const showRightPanel = !boardFullscreen && rightPanelOpen
+  const boardWidthForLayout = boardFullscreen
+    ? 'min(80vw, 80vh, 576px)'
+    : (showLeftPanel && showRightPanel
+      ? 'min(calc(100vh - 108px), calc(100vw - 812px))'
+      : (showLeftPanel || showRightPanel
+        ? 'min(calc(100vh - 108px), calc(100vw - 524px))'
+        : 'min(calc(100vh - 108px), calc(100vw - 236px))'))
 
   return (
     <div className="h-screen bg-[#262421] text-white flex flex-col overflow-hidden">
@@ -453,24 +481,54 @@ export default function ChessApp() {
       </header>
 
       {/* ── Main layout ── */}
-      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex min-h-0 relative">
+        {!boardFullscreen && (
+          <>
+            <button
+              onClick={() => setLeftPanelOpen((v) => !v)}
+              aria-label={showLeftPanel ? 'Collapse left panel' : 'Expand left panel'}
+              className="absolute left-3 top-1/2 -translate-y-1/2 z-30 h-8 w-8 rounded-md border border-white/15 bg-black/45 text-gray-200 hover:bg-black/65 hover:text-white text-sm font-bold"
+            >
+              {showLeftPanel ? '<' : '>'}
+            </button>
+            <button
+              onClick={() => setRightPanelOpen((v) => !v)}
+              aria-label={showRightPanel ? 'Collapse right panel' : 'Expand right panel'}
+              className="absolute right-3 top-1/2 -translate-y-1/2 z-30 h-8 w-8 rounded-md border border-white/15 bg-black/45 text-gray-200 hover:bg-black/65 hover:text-white text-sm font-bold"
+            >
+              {showRightPanel ? '>' : '<'}
+            </button>
+          </>
+        )}
 
         {/* ── Left panel — Engine ── */}
-        <aside className={`${boardFullscreen ? 'hidden' : 'w-72 shrink-0 flex flex-col bg-[#1a1714] border-r border-white/6 overflow-y-auto'}`}>
-          <div className="p-4">
-            <EnginePanel
-              engineLines={engineLines}
-              isAnalyzing={isAnalyzing}
-              settings={engineSettings}
-              onSettingsChange={(partial) => setEngineSettings((s) => ({ ...s, ...partial }))}
-              gameMode={gameMode}
-              onGameModeChange={(mode) => { setGameMode(mode); setEngineLines([]); setBestMoveArrow([]) }}
-            />
-          </div>
+        <aside className={`${showLeftPanel ? 'relative w-72 shrink-0 flex flex-col bg-[#1a1714] border-r border-white/6 overflow-y-auto' : 'hidden'}`}>
+          {showLeftPanel ? (
+            <div className="p-4">
+              <EnginePanel
+                engineLines={engineLines}
+                isAnalyzing={isAnalyzing}
+                settings={engineSettings}
+                onSettingsChange={(partial) => setEngineSettings((s) => ({ ...s, ...partial }))}
+                gameMode={gameMode}
+                onGameModeChange={(mode) => { setGameMode(mode); setEngineLines([]); setBestMoveArrow([]) }}
+              />
+            </div>
+          ) : (
+            <div className="h-full flex items-start justify-center pt-3">
+              <button
+                onClick={() => setLeftPanelOpen(true)}
+                aria-label="Expand left panel"
+                className="h-7 w-7 rounded-md border border-white/10 bg-white/5 text-gray-300 hover:bg-white/10 hover:text-white text-sm font-bold"
+              >
+                {'>'}
+              </button>
+            </div>
+          )}
         </aside>
 
         {/* ── Center — Board ── */}
-        <main className={`relative flex-1 flex items-center justify-center min-h-0 min-w-0 ${boardFullscreen ? 'bg-[#151311] p-2' : 'bg-[#262421]'}`}>
+        <main className={`relative flex-1 flex items-center justify-center min-h-0 min-w-0 ${boardFullscreen ? 'bg-[#151311] p-6 sm:p-8 md:p-10' : 'bg-[#262421]'}`}>
           {boardFullscreen && (
             <button
               onClick={() => setBoardFullscreen(false)}
@@ -479,7 +537,7 @@ export default function ChessApp() {
               Exit Fullscreen
             </button>
           )}
-          <div className={`flex items-center h-full box-border ${boardFullscreen ? '' : 'gap-6 px-6 py-6'}`}>
+          <div className={`flex items-center justify-center h-full w-full box-border ${boardFullscreen ? '' : 'gap-6 px-6 py-6'}`}>
 
             {/* Eval bar */}
             {!boardFullscreen && (
@@ -492,8 +550,8 @@ export default function ChessApp() {
             <div
               className="relative"
               style={{
-                width: boardFullscreen ? 'min(96vw, 96vh)' : 'min(calc(100vh - 108px), calc(100vw - 812px))',
-                height: boardFullscreen ? 'min(96vw, 96vh)' : 'min(calc(100vh - 108px), calc(100vw - 812px))',
+                width: boardWidthForLayout,
+                height: boardWidthForLayout,
                 minWidth:  '300px',
                 minHeight: '300px',
               }}
@@ -516,36 +574,47 @@ export default function ChessApp() {
         </main>
 
         {/* ── Right panel — Controls + History ── */}
-        <aside className={`${boardFullscreen ? 'hidden' : 'w-72 shrink-0 flex flex-col bg-[#1a1714] border-l border-white/6 overflow-hidden'}`}>
+        <aside className={`${showRightPanel ? 'w-72 shrink-0 flex flex-col bg-[#1a1714] border-l border-white/6 overflow-hidden' : 'hidden'}`}>
+          {showRightPanel ? (
+            <>
+              <div className="shrink-0 p-3 border-b border-white/6">
+                <GameControls
+                  flipped={flipped}
+                  canUndo={currentMoveIndex >= 0}
+                  canRedo={redoStack.length > 0}
+                  onFlip={() => setFlipped((f) => !f)}
+                  onUndo={handleUndo}
+                  onRedo={handleRedo}
+                  onNewGame={handleNewGame}
+                  onExportPGN={handleExportPGN}
+                  onImportPGN={handleImportPGN}
+                  onCopyFEN={handleCopyFEN}
+                  onPasteFEN={handlePasteFEN}
+                  playerColor={playerColor}
+                  onPlayerColorChange={handlePlayerColorChange}
+                  gameStatus={getGameStatus()}
+                />
+              </div>
 
-          {/* Controls section */}
-          <div className="shrink-0 p-3 border-b border-white/6">
-            <GameControls
-              flipped={flipped}
-              canUndo={currentMoveIndex >= 0}
-              canRedo={redoStack.length > 0}
-              onFlip={() => setFlipped((f) => !f)}
-              onUndo={handleUndo}
-              onRedo={handleRedo}
-              onNewGame={handleNewGame}
-              onExportPGN={handleExportPGN}
-              onImportPGN={handleImportPGN}
-              onCopyFEN={handleCopyFEN}
-              onPasteFEN={handlePasteFEN}
-              playerColor={playerColor}
-              onPlayerColorChange={handlePlayerColorChange}
-              gameStatus={getGameStatus()}
-            />
-          </div>
-
-          {/* Move history */}
-          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            <MoveHistory
-              history={displayedHistory}
-              currentMoveIndex={currentMoveIndex}
-              onMoveClick={handleMoveClick}
-            />
-          </div>
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                <MoveHistory
+                  history={displayedHistory}
+                  currentMoveIndex={currentMoveIndex}
+                  onMoveClick={handleMoveClick}
+                />
+              </div>
+            </>
+          ) : (
+            <div className="h-full flex items-start justify-center pt-3">
+              <button
+                onClick={() => setRightPanelOpen(true)}
+                aria-label="Expand right panel"
+                className="h-7 w-7 rounded-md border border-white/10 bg-white/5 text-gray-300 hover:bg-white/10 hover:text-white text-sm font-bold"
+              >
+                {'<'}
+              </button>
+            </div>
+          )}
         </aside>
       </div>
 
