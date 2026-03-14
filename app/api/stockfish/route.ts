@@ -4,9 +4,25 @@ import { getEngine, EngineInfo, StockfishOptions } from '@/lib/stockfish'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+const externalBase = process.env.ENGINE_API_URL?.replace(/\/+$/, '')
+
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const { action, fen, moves, options } = body
+  const { action, options } = body
+
+  if (externalBase) {
+    const upstream = await fetch(`${externalBase}/api/stockfish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+    })
+    const text = await upstream.text()
+    return new Response(text, {
+      status: upstream.status,
+      headers: { 'Content-Type': upstream.headers.get('content-type') ?? 'application/json' },
+    })
+  }
 
   const engine = getEngine()
 
@@ -29,6 +45,22 @@ export async function POST(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
+
+  if (externalBase) {
+    const upstream = await fetch(`${externalBase}/api/stockfish?${searchParams.toString()}`, {
+      method: 'GET',
+      cache: 'no-store',
+    })
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: {
+        'Content-Type': upstream.headers.get('content-type') ?? 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      },
+    })
+  }
+
   const fen = searchParams.get('fen') ?? 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
   const moves = searchParams.get('moves')?.split(',').filter(Boolean) ?? []
   const movetime = parseInt(searchParams.get('movetime') ?? '2000')
@@ -45,7 +77,6 @@ export async function GET(req: NextRequest) {
 
   engine.stop()
 
-  // Configure options
   engine.configure({
     multiPV,
     limitStrength,
