@@ -20,7 +20,7 @@ interface EnginePanelProps {
 
 const MODES = [
   { id: 'vs-ai' as const,      label: 'Play vs AI',   desc: 'Play against Stockfish 18' },
-  { id: 'two-player' as const, label: 'Two Players',  desc: 'Pass and play on one device' },
+  { id: 'two-player' as const, label: 'Play Online',  desc: 'Real-time game via shared link' },
   { id: 'analysis' as const,   label: 'Analysis',     desc: 'Explore any position' },
 ]
 

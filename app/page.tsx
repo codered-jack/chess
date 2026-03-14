@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { Chess, Square, Move } from 'chess.js'
+import PartySocket from 'partysocket'
 import ChessBoard from '@/components/ChessBoard'
 import EvalBar from '@/components/EvalBar'
 import MoveHistory from '@/components/MoveHistory'
@@ -10,14 +11,58 @@ import GameControls, { StatusType } from '@/components/GameControls'
 import { CapturedPiecesRow } from '@/components/CapturedPieces'
 import PlayerClock from '@/components/PlayerClock'
 import ToastContainer, { ToastItem } from '@/components/ToastContainer'
+import OnlineLobby from '@/components/OnlineLobby'
 import { EngineInfo } from '@/lib/stockfish'
 import { getOpeningName } from '@/lib/openings'
+import type { ServerMessage } from '@/lib/online'
 
 type GameMode = 'analysis' | 'vs-ai' | 'two-player'
 type SoundType = 'move' | 'capture' | 'check' | 'checkmate'
 
 const INITIAL_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 const LEFT_PANEL_COLLAPSE_BREAKPOINT = 1380
+
+function OnlineInviteBar({ roomId }: { roomId: string }) {
+  const [copied, setCopied] = useState(false)
+  const url = typeof window !== 'undefined'
+    ? `${window.location.origin}${window.location.pathname}?room=${roomId}`
+    : ''
+
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(url) } catch {
+      const el = document.createElement('textarea')
+      el.value = url; document.body.appendChild(el); el.select()
+      document.execCommand('copy'); document.body.removeChild(el)
+    }
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <div className="shrink-0 px-3 py-2 border-b border-white/6 bg-[#86b114]/8">
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <span className="text-[10px] font-bold text-[#86b114] uppercase tracking-wide">Online Game</span>
+        <span className="text-[10px] text-gray-500">— share link with opponent</span>
+      </div>
+      <div className="flex gap-1.5">
+        <div className="flex-1 bg-black/30 border border-white/8 rounded px-2 py-1 text-[10px] text-gray-400 font-mono truncate select-all">
+          {url}
+        </div>
+        <button
+          onClick={copy}
+          title="Copy invite link"
+          className={`shrink-0 px-2.5 py-1 rounded text-[10px] font-semibold transition-all border ${
+            copied
+              ? 'bg-[#86b114]/20 border-[#86b114]/50 text-[#86b114]'
+              : 'bg-white/5 border-white/10 text-gray-300 hover:bg-white/10 hover:text-white'
+          }`}
+        >
+          {copied ? 'Copied!' : 'Copy'}
+        </button>
+      </div>
+    </div>
+  )
+}
 
 export default function ChessApp() {
   const [allPositions, setAllPositions] = useState<string[]>([INITIAL_FEN])
@@ -111,6 +156,13 @@ export default function ChessApp() {
   const [whiteTime, setWhiteTime] = useState(0)
   const [blackTime, setBlackTime] = useState(0)
   const [timedOut, setTimedOut] = useState<'w' | 'b' | null>(null)
+
+  // ── Online (two-player) state ────────────────────────────────────────────
+  const [onlineRoomId, setOnlineRoomId] = useState<string | null>(null)
+  const [onlineColor, setOnlineColor] = useState<'w' | 'b'>('w')
+  const [onlineWaiting, setOnlineWaiting] = useState(false) // waiting for opponent
+  const [onlineDrawOffered, setOnlineDrawOffered] = useState(false) // opponent offered a draw
+  const socketRef = useRef<PartySocket | null>(null)
 
   // Toast notifications
   const [toasts, setToasts] = useState<ToastItem[]>([])
@@ -484,6 +536,13 @@ export default function ChessApp() {
 
       if (isPromotion && !promotion) { setPromotionPending({ from, to }); return }
 
+      // In online mode, send to server and let the echo apply the move
+      if (gameMode === 'two-player' && socketRef.current && onlineRoomId) {
+        setSelectedSquare(null); setLegalMoves([])
+        socketRef.current.send(JSON.stringify({ type: 'move', from, to, ...(promotion ? { promotion } : {}) }))
+        return
+      }
+
       let mv: Move | null = null
       try { mv = g.move({ from, to, promotion: promotion ?? 'q' }) } catch {
         setSelectedSquare(null); setLegalMoves([]); return
@@ -498,18 +557,174 @@ export default function ChessApp() {
       const soundType = getSoundType(g, mv)
       applyMove(g.fen(), { from, to, san: mv.san, lan: mv.lan, promotion }, currentMoveIndex, soundType)
     },
-    [currentFen, currentMoveIndex, applyMove, getSoundType]
+    [currentFen, currentMoveIndex, applyMove, getSoundType, gameMode, onlineRoomId]
   )
+
+  // ── Online helpers ───────────────────────────────────────────────────────
+
+  const sendOnlineMessage = useCallback((msg: object) => {
+    socketRef.current?.send(JSON.stringify(msg))
+  }, [])
+
+  const resetOnlineState = useCallback(() => {
+    socketRef.current?.close()
+    socketRef.current = null
+    setOnlineRoomId(null)
+    setOnlineWaiting(false)
+    setOnlineDrawOffered(false)
+    // Remove ?room= from URL without navigation
+    const url = new URL(window.location.href)
+    url.searchParams.delete('room')
+    window.history.replaceState({}, '', url.toString())
+  }, [])
+
+  // ── Online socket lifecycle ───────────────────────────────────────────────
+
+  // On mount: if ?room= is in the URL, switch to two-player and join that room
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const roomId = params.get('room')
+    if (!roomId) return
+    setGameMode('two-player')
+    setOnlineRoomId(roomId)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Connect / disconnect socket whenever the online room changes
+  useEffect(() => {
+    if (gameMode !== 'two-player' || !onlineRoomId) return
+
+    const host = process.env.NEXT_PUBLIC_PARTYKIT_HOST ?? '127.0.0.1:1999'
+    const socket = new PartySocket({ host, room: onlineRoomId, party: 'main' })
+    socketRef.current = socket
+
+    // Put room ID in URL so the link can be shared
+    const url = new URL(window.location.href)
+    url.searchParams.set('room', onlineRoomId)
+    window.history.replaceState({}, '', url.toString())
+
+    socket.onmessage = (evt: MessageEvent) => {
+      let msg: ServerMessage
+      try { msg = JSON.parse(evt.data as string) as ServerMessage } catch { return }
+
+      if (msg.type === 'welcome') {
+        setOnlineColor(msg.color)
+        setOnlineWaiting(msg.waiting)
+        setFlipped(msg.color === 'b')
+        setPlayerColor(msg.color)
+        // Sync timer from server
+        if (msg.timeControl) {
+          setTimeControl(msg.timeControl)
+          setWhiteTime(msg.whiteTime)
+          setBlackTime(msg.blackTime)
+        }
+        // Restore board state for reconnections
+        if (msg.moves.length > 0) {
+          const tmp = new Chess()
+          const positions: string[] = [INITIAL_FEN]
+          const moves: typeof allMoves = []
+          for (const m of msg.moves) {
+            try {
+              const result = tmp.move({ from: m.from, to: m.to, ...(m.promotion ? { promotion: m.promotion } : {}) })
+              if (result) {
+                positions.push(tmp.fen())
+                moves.push({ from: m.from as Square, to: m.to as Square, san: m.san, lan: m.lan, promotion: m.promotion })
+              }
+            } catch { break }
+          }
+          setAllPositions(positions)
+          setAllMoves(moves)
+          setCurrentMoveIndex(moves.length - 1)
+          if (moves.length > 0) setLastMove({ from: moves.at(-1)!.from, to: moves.at(-1)!.to })
+        }
+        return
+      }
+
+      if (msg.type === 'opponent-joined') {
+        setOnlineWaiting(false)
+        showToast({ message: 'Opponent joined! Game started.', type: 'success' }, 3000)
+        return
+      }
+
+      if (msg.type === 'move') {
+        const { move, fen, whiteTime, blackTime } = msg
+        // Ignore sentinel (time-control sync with empty move)
+        if (move.from && move.to) {
+          const g = new Chess(fen)
+          const soundType = g.isCheckmate() ? 'checkmate' : g.inCheck() ? 'check' : (move as { captured?: string }).captured ? 'capture' : 'move'
+          applyMove(fen, { from: move.from as Square, to: move.to as Square, san: move.san, lan: move.lan, promotion: move.promotion }, currentMoveIndex, soundType)
+        }
+        // Always sync the authoritative clock values from server
+        setWhiteTime(whiteTime)
+        setBlackTime(blackTime)
+        return
+      }
+
+      if (msg.type === 'game-over') {
+        if (msg.reason === 'checkmate') {
+          // chess.js detects this from position automatically
+        } else if (msg.reason === 'resign') {
+          const loser: 'w' | 'b' = msg.winner === 'w' ? 'b' : 'w'
+          setResigned(loser)
+        } else if (msg.reason === 'timeout') {
+          setTimedOut(msg.winner === 'w' ? 'b' : 'w') // loser is the one who timed out
+        } else if (msg.reason === 'draw' || msg.reason === 'stalemate') {
+          setDrawAccepted(true)
+        }
+        setOnlineDrawOffered(false)
+        return
+      }
+
+      if (msg.type === 'draw-offer') {
+        setOnlineDrawOffered(true)
+        setShowDrawOfferModal(true)
+        return
+      }
+
+      if (msg.type === 'opponent-disconnected') {
+        showToast({ message: 'Opponent disconnected', type: 'warn' }, 5000)
+        return
+      }
+
+      if (msg.type === 'error') {
+        showToast({ message: `Online error: ${msg.message}`, type: 'warn' }, 3000)
+      }
+    }
+
+    socket.onerror = () => {
+      showToast({ message: 'Connection error. Please refresh.', type: 'warn' }, 5000)
+    }
+
+    return () => {
+      socket.close()
+      socketRef.current = null
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameMode, onlineRoomId])
 
   const handleSquareClick = useCallback(
     (square: Square) => {
       if (isGameOver) return
-      const isPlayerTurn = gameMode === 'two-player' || currentGame.turn() === playerColor
-      if (!isPlayerTurn && gameMode === 'vs-ai') return
+
+      // In online mode only the player whose turn it is (matching onlineColor) may move
+      if (gameMode === 'two-player' && onlineRoomId) {
+        if (onlineWaiting) return
+        if (currentGame.turn() !== onlineColor) return
+      } else {
+        const isPlayerTurn = gameMode === 'two-player' || currentGame.turn() === playerColor
+        if (!isPlayerTurn && gameMode === 'vs-ai') return
+      }
 
       if (selectedSquare) {
         if (legalMoves.includes(square)) {
-          makeMove(selectedSquare, square)
+          if (gameMode === 'two-player' && onlineRoomId) {
+            // Check for promotion first — makeMove will call setPromotionPending
+            // We intercept the actual send in makeMove via the promotionPending flow,
+            // but for non-promotion moves we send directly via makeMove override below.
+            makeMove(selectedSquare, square)
+          } else {
+            makeMove(selectedSquare, square)
+          }
         } else {
           const piece = currentGame.get(square)
           if (piece && piece.color === currentGame.turn()) {
@@ -528,19 +743,24 @@ export default function ChessApp() {
         }
       }
     },
-    [selectedSquare, legalMoves, currentGame, gameMode, playerColor, isGameOver, isAtLatest, makeMove]
+    [selectedSquare, legalMoves, currentGame, gameMode, playerColor, isGameOver, isAtLatest, makeMove, onlineRoomId, onlineWaiting, onlineColor]
   )
 
   const handleDrop = useCallback(
     (from: Square, to: Square) => {
-      const isPlayerTurn = gameMode === 'two-player' || currentGame.turn() === playerColor
-      if (!isPlayerTurn && gameMode === 'vs-ai') return
+      if (gameMode === 'two-player' && onlineRoomId) {
+        if (onlineWaiting || currentGame.turn() !== onlineColor) return
+      } else {
+        const isPlayerTurn = gameMode === 'two-player' || currentGame.turn() === playerColor
+        if (!isPlayerTurn && gameMode === 'vs-ai') return
+      }
       makeMove(from, to)
     },
-    [makeMove, currentGame, gameMode, playerColor, isAtLatest]
+    [makeMove, currentGame, gameMode, playerColor, isAtLatest, onlineRoomId, onlineWaiting, onlineColor]
   )
 
   const handleUndo = useCallback(() => {
+    if (gameMode === 'two-player' && onlineRoomId) return // no undo in online mode
     if (currentMoveIndex < 0) return
     abortRef.current?.abort()
     isNavigatingRef.current = true
@@ -551,9 +771,10 @@ export default function ChessApp() {
     setCurrentMoveIndex(newIndex)
     setSelectedSquare(null); setLegalMoves([]); setBestMoveArrow([])
     setResigned(null); setTimedOut(null); setShowGameOverModal(false)
-  }, [currentMoveIndex, allMoves, gameMode])
+  }, [currentMoveIndex, allMoves, gameMode, onlineRoomId])
 
   const handleRedo = useCallback(() => {
+    if (gameMode === 'two-player' && onlineRoomId) return // no redo in online mode
     if (redoStack.length === 0) return
     abortRef.current?.abort()
     isNavigatingRef.current = true
@@ -562,32 +783,54 @@ export default function ChessApp() {
     setRedoStack((s) => s.slice(stepsForward))
     setBestMoveArrow([])
     setResigned(null); setTimedOut(null); setShowGameOverModal(false)
-  }, [redoStack, gameMode, allMoves.length])
+  }, [redoStack, gameMode, allMoves.length, onlineRoomId])
 
-  // Countdown timer
+  // Countdown timer — disabled in online mode (server is authoritative)
   useEffect(() => {
     if (!timeControl || isGameOver || !isAtLatest || allMoves.length === 0) return
+    const isOnline = gameMode === 'two-player' && !!onlineRoomId
     const interval = setInterval(() => {
       if (turn === 'w') {
         setWhiteTime((t) => {
-          if (t <= 1) { setTimedOut('w'); return 0 }
-          return t - 1
+          const next = Math.max(0, t - 1)
+          if (next === 0) {
+            if (isOnline) {
+              // Let server confirm — send flag instead of ending locally
+              socketRef.current?.send(JSON.stringify({ type: 'flag' }))
+            } else {
+              setTimedOut('w')
+            }
+          }
+          return next
         })
       } else {
         setBlackTime((t) => {
-          if (t <= 1) { setTimedOut('b'); return 0 }
-          return t - 1
+          const next = Math.max(0, t - 1)
+          if (next === 0) {
+            if (isOnline) {
+              socketRef.current?.send(JSON.stringify({ type: 'flag' }))
+            } else {
+              setTimedOut('b')
+            }
+          }
+          return next
         })
       }
     }, 1000)
     return () => clearInterval(interval)
-  }, [timeControl, isGameOver, isAtLatest, allMoves.length, turn])
+  }, [timeControl, isGameOver, isAtLatest, allMoves.length, turn, gameMode, onlineRoomId])
 
   const handleTimeControlChange = (seconds: number | null) => {
+    // Disallow changes once the game is underway
+    if (allMoves.length > 0 && !isGameOver) return
     setTimeControl(seconds)
     setWhiteTime(seconds ?? 0)
     setBlackTime(seconds ?? 0)
     setTimedOut(null)
+    // In online mode, tell the server so both players share the same clock
+    if (gameMode === 'two-player' && socketRef.current) {
+      socketRef.current.send(JSON.stringify({ type: 'set-time-control', seconds }))
+    }
   }
 
   // Draw-claim toast: show when threefold repetition or 50-move rule triggers
@@ -632,6 +875,13 @@ export default function ChessApp() {
   }
 
   const handleNewGame = () => {
+    if (gameMode === 'two-player' && onlineRoomId) {
+      // Close the old room and open a brand-new one (avoids "room is full" on same room)
+      resetOnlineState()
+      const newRoomId = crypto.randomUUID()
+      setOnlineRoomId(newRoomId)
+      setOnlineWaiting(true)
+    }
     abortRef.current?.abort()
     setAllPositions([INITIAL_FEN]); setAllMoves([]); setCurrentMoveIndex(-1)
     setRedoStack([]); setSelectedSquare(null); setLegalMoves([])
@@ -647,25 +897,37 @@ export default function ChessApp() {
   }
 
   const confirmResign = () => {
-    setResigned(playerColor)
+    if (gameMode === 'two-player' && onlineRoomId) {
+      sendOnlineMessage({ type: 'resign' })
+    }
+    setResigned(gameMode === 'two-player' && onlineRoomId ? onlineColor : playerColor)
     abortRef.current?.abort()
     setShowResignModal(false)
   }
 
   const handleDrawOffer = () => {
     if (isGameOver) return
+    if (gameMode === 'two-player' && onlineRoomId) {
+      sendOnlineMessage({ type: 'draw-offer' })
+      showToast({ message: 'Draw offered to opponent', type: 'success' }, 3000)
+      return
+    }
     setShowDrawOfferModal(true)
   }
 
   const acceptDraw = useCallback(() => {
+    if (gameMode === 'two-player' && onlineRoomId) {
+      sendOnlineMessage({ type: 'draw-accept' })
+    }
     setDrawAccepted(true)
+    setOnlineDrawOffered(false)
     abortRef.current?.abort()
     setShowDrawOfferModal(false)
     if (drawClaimToastId.current) {
       setToasts((prev) => prev.filter((t) => t.id !== drawClaimToastId.current))
       drawClaimToastId.current = null
     }
-  }, [])
+  }, [gameMode, onlineRoomId, sendOnlineMessage])
 
   const declineDraw = () => setShowDrawOfferModal(false)
 
@@ -833,6 +1095,31 @@ export default function ChessApp() {
         </div>
       </header>
 
+      {/* ── Online lobby overlay (waiting for opponent) ── */}
+      {gameMode === 'two-player' && onlineRoomId && onlineWaiting && (
+        <OnlineLobby
+          roomUrl={typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}?room=${onlineRoomId}` : ''}
+          playerColor={onlineColor}
+          timeControl={timeControl}
+          onTimeControlChange={handleTimeControlChange}
+          onCancel={() => { resetOnlineState(); setGameMode('vs-ai') }}
+        />
+      )}
+
+      {/* ── Opponent draw offer modal (online) ── */}
+      {gameMode === 'two-player' && onlineDrawOffered && showDrawOfferModal && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-[#1a1714] border border-white/10 rounded-2xl p-8 flex flex-col items-center gap-5 shadow-2xl w-80">
+            <p className="text-white font-bold text-lg text-center">Opponent offers a Draw</p>
+            <p className="text-gray-400 text-sm text-center">Do you accept?</p>
+            <div className="flex gap-3 w-full">
+              <button onClick={acceptDraw} className="flex-1 py-2 rounded-lg bg-[#86b114] hover:bg-[#97c815] text-white text-sm font-semibold transition-all">Accept</button>
+              <button onClick={() => { setShowDrawOfferModal(false); setOnlineDrawOffered(false) }} className="flex-1 py-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 text-sm font-semibold transition-all">Decline</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Main layout ── */}
       <div className="flex-1 relative min-h-0 overflow-hidden">
 
@@ -919,7 +1206,19 @@ export default function ChessApp() {
                   settings={engineSettings}
                   onSettingsChange={(partial) => setEngineSettings((s) => ({ ...s, ...partial }))}
                   gameMode={gameMode}
-                  onGameModeChange={(mode) => { setGameMode(mode); setEngineLines([]); setBestMoveArrow([]) }}
+                  onGameModeChange={(mode) => {
+                    // If leaving online mode, clean up the socket
+                    if (gameMode === 'two-player' && onlineRoomId && mode !== 'two-player') {
+                      resetOnlineState()
+                    }
+                    // If entering two-player mode, create a new online room
+                    if (mode === 'two-player' && !onlineRoomId) {
+                      const roomId = crypto.randomUUID()
+                      setOnlineRoomId(roomId)
+                      setOnlineWaiting(true)
+                    }
+                    setGameMode(mode); setEngineLines([]); setBestMoveArrow([])
+                  }}
                 />
               </div>
             </aside>
@@ -952,29 +1251,51 @@ export default function ChessApp() {
             <aside
               className={`absolute top-0 right-0 h-full z-40 flex flex-col bg-[#1a1714] border-l border-white/6 overflow-hidden transition-transform duration-200 w-[380px] ${showRightPanel ? 'translate-x-0' : 'translate-x-full'}`}
             >
-              {/* Time control selector */}
-              <div className="shrink-0 px-3 py-2 border-b border-white/6 flex items-center gap-1.5">
-                <span className="text-[11px] text-gray-500 font-semibold shrink-0">Timer</span>
-                {([null, 5 * 60, 10 * 60, 15 * 60] as (number | null)[]).map((tc) => (
-                  <button
-                    key={tc ?? 'off'}
-                    onClick={() => handleTimeControlChange(tc)}
-                    className={`flex-1 py-1 rounded text-[11px] font-semibold transition-all border ${
-                      timeControl === tc
-                        ? 'bg-[#86b114]/20 border-[#86b114]/40 text-[#86b114]'
-                        : 'bg-white/5 border-white/8 text-gray-400 hover:bg-white/10 hover:text-gray-200'
-                    }`}
-                  >
-                    {tc === null ? 'Off' : `${tc / 60}m`}
-                  </button>
-                ))}
-              </div>
+              {/* Online room invite bar */}
+              {gameMode === 'two-player' && onlineRoomId && (
+                <OnlineInviteBar roomId={onlineRoomId} />
+              )}
+
+              {/* Time control selector — hidden in online mode (set in lobby by creator) */}
+              {!(gameMode === 'two-player' && onlineRoomId) && (() => {
+                const timerLocked = allMoves.length > 0 && !isGameOver
+                return (
+                  <div className="shrink-0 px-3 py-2 border-b border-white/6 flex items-center gap-1.5">
+                    <span className={`text-[11px] font-semibold shrink-0 ${timerLocked ? 'text-gray-600' : 'text-gray-500'}`}>Timer</span>
+                    {timerLocked && (
+                      <span className="text-[10px] text-gray-600 italic">locked during game</span>
+                    )}
+                    {!timerLocked && ([null, 5 * 60, 10 * 60, 15 * 60] as (number | null)[]).map((tc) => (
+                      <button
+                        key={tc ?? 'off'}
+                        onClick={() => handleTimeControlChange(tc)}
+                        className={`flex-1 py-1 rounded text-[11px] font-semibold transition-all border ${
+                          timeControl === tc
+                            ? 'bg-[#86b114]/20 border-[#86b114]/40 text-[#86b114]'
+                            : 'bg-white/5 border-white/8 text-gray-400 hover:bg-white/10 hover:text-gray-200'
+                        }`}
+                      >
+                        {tc === null ? 'Off' : `${tc / 60}m`}
+                      </button>
+                    ))}
+                    {timerLocked && (
+                      <span className={`text-[11px] font-semibold px-2 py-1 rounded border ${
+                        timeControl
+                          ? 'text-[#86b114] border-[#86b114]/40 bg-[#86b114]/10'
+                          : 'text-gray-600 border-white/6 bg-white/3'
+                      }`}>
+                        {timeControl ? `${timeControl / 60}m` : 'Off'}
+                      </span>
+                    )}
+                  </div>
+                )
+              })()}
 
               <div className="shrink-0 p-3 border-b border-white/6">
                 <GameControls
                   flipped={flipped}
-                  canUndo={currentMoveIndex >= 0}
-                  canRedo={redoStack.length > 0}
+                  canUndo={currentMoveIndex >= 0 && !(gameMode === 'two-player' && onlineRoomId)}
+                  canRedo={redoStack.length > 0 && !(gameMode === 'two-player' && onlineRoomId)}
                   canResign={!isGameOver && gameMode !== 'analysis'}
                   canOfferDraw={!isGameOver && gameMode !== 'analysis'}
                   onFlip={() => setFlipped((f) => !f)}
