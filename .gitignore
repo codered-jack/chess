@@ -20,6 +20,9 @@
 # production
 /build
 
+# local native binaries
+/engines/stockfish
+
 # misc
 .DS_Store
 *.pem
@@ -39,3 +42,13 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local editor settings
+.vscode/
+.idea/
+
+# local logs
+*.log
+
+# OS files
+Thumbs.db
