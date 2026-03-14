@@ -9,6 +9,7 @@ interface MoveHistoryProps {
   openingInfo: OpeningInfo | null
   currentMoveIndex: number
   onMoveClick: (index: number) => void
+  isVisible?: boolean
 }
 
 const BADGE_STYLES: Record<string, string> = {
@@ -35,6 +36,7 @@ export default function MoveHistory({
   openingInfo,
   currentMoveIndex,
   onMoveClick,
+  isVisible = true,
 }: MoveHistoryProps) {
   const activeRef = useRef<HTMLButtonElement>(null)
   const legendBtnRef = useRef<HTMLButtonElement>(null)
@@ -42,8 +44,11 @@ export default function MoveHistory({
   const [legendPos, setLegendPos] = useState({ bottom: 0, right: 0 })
 
   useEffect(() => {
+    // Only scroll when the panel is visible — scrollIntoView ignores CSS transforms
+    // and will scroll the viewport when the panel is hidden off-screen (translate-x-full)
+    if (!isVisible) return
     activeRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-  }, [currentMoveIndex])
+  }, [currentMoveIndex, isVisible])
 
   const toggleLegend = () => {
     if (!legendOpen && legendBtnRef.current) {

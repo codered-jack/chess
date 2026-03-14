@@ -1332,6 +1332,7 @@ export default function ChessApp() {
                   openingInfo={openingInfo}
                   currentMoveIndex={currentMoveIndex}
                   onMoveClick={handleMoveClick}
+                  isVisible={showRightPanel}
                 />
               </div>
             </aside>
