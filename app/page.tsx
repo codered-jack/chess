@@ -54,6 +54,7 @@ export default function ChessApp() {
   const [promotionPending, setPromotionPending] = useState<{ from: Square; to: Square } | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const engineCallingRef = useRef(false)
+  const engineCallGenRef = useRef(0)
   const isNavigatingRef = useRef(false)
   const soundPoolRef = useRef<Record<SoundType, HTMLAudioElement | null>>({
     move: null,
@@ -249,19 +250,20 @@ export default function ChessApp() {
 
   const callEngine = useCallback(
     async (fen: string, mode: GameMode, settings: typeof engineSettings, pColor: 'w' | 'b', moveIndex: number) => {
+      const myGen = ++engineCallGenRef.current
       const cid = Math.random().toString(36).slice(2, 7)
 
       if (engineCallingRef.current) {
-        console.log(`[SF:client][${cid}] previous call running — aborting it`)
+        console.log(`[SF:client][${cid}] previous call running — aborting it (gen=${myGen})`)
         abortRef.current?.abort()
         await new Promise((r) => setTimeout(r, 80))
-        // After the wait, if another call already started (e.g. AI move landed while we
-        // were waiting), bail out — that newer call has the correct FEN and should win.
-        if (engineCallingRef.current) {
-          console.log(`[SF:client][${cid}] newer call took over during wait — bailing out`)
+        // If a newer callEngine fired during the wait (rapid undo/redo/AI move), it will
+        // have incremented engineCallGenRef. Bail — the newer call has the correct FEN.
+        if (myGen !== engineCallGenRef.current) {
+          console.log(`[SF:client][${cid}] superseded during wait (myGen=${myGen} cur=${engineCallGenRef.current}) — bailing out`)
           return
         }
-        console.log(`[SF:client][${cid}] 80ms wait done, proceeding`)
+        console.log(`[SF:client][${cid}] 80ms wait done, still current gen — proceeding`)
       }
 
       const g = new Chess(fen)
