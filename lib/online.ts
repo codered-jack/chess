@@ -69,6 +69,13 @@ export type ServerOpponentDisconnected = { type: 'opponent-disconnected' }
 
 export type ServerError = { type: 'error'; message: string }
 
+export type ServerTimeControlSet = {
+  type: 'time-control-set'
+  timeControl: number | null
+  whiteTime: number
+  blackTime: number
+}
+
 export type ServerMessage =
   | ServerWelcome
   | ServerOpponentJoined
@@ -77,3 +84,4 @@ export type ServerMessage =
   | ServerDrawOffer
   | ServerOpponentDisconnected
   | ServerError
+  | ServerTimeControlSet

@@ -5,6 +5,7 @@ import type {
   ServerMessage,
   PlayerColor,
   OnlineMove,
+  ServerTimeControlSet,
 } from '../lib/online'
 
 type ConnState = { color: PlayerColor }
@@ -161,14 +162,14 @@ export default class ChessRoom implements Party.Server {
       this.blackTime   = msg.seconds ?? 0
       this.lastMoveAt  = null
       await this.persist()
-      // Echo updated times to both players
-      broadcast(this.room, {
-        type: 'move',
-        move: { from: '', to: '', san: '', lan: '' }, // sentinel — client ignores empty move
-        fen: this.game.fen(),
+      // Broadcast a dedicated message so both clients update timeControl + times
+      const tcMsg: ServerTimeControlSet = {
+        type: 'time-control-set',
+        timeControl: this.timeControl,
         whiteTime: this.whiteTime,
         blackTime: this.blackTime,
-      })
+      }
+      broadcast(this.room, tcMsg)
       return
     }
 

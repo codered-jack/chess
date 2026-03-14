@@ -52,3 +52,6 @@ next-env.d.ts
 
 # OS files
 Thumbs.db
+
+# PartyKit local dev state (SQLite durable storage simulation)
+.partykit/

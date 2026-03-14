@@ -163,6 +163,8 @@ export default function ChessApp() {
   const [onlineWaiting, setOnlineWaiting] = useState(false) // waiting for opponent
   const [onlineDrawOffered, setOnlineDrawOffered] = useState(false) // opponent offered a draw
   const socketRef = useRef<PartySocket | null>(null)
+  // Kept in sync with currentMoveIndex so the socket onmessage closure always sees the latest value
+  const currentMoveIndexRef = useRef(currentMoveIndex)
 
   // Toast notifications
   const [toasts, setToasts] = useState<ToastItem[]>([])
@@ -198,6 +200,9 @@ export default function ChessApp() {
   const isGameOver = currentGame.isGameOver() || resigned !== null || timedOut !== null || drawAccepted
   const turn = currentGame.turn()
   const isAtLatest = currentMoveIndex === allMoves.length - 1
+
+  // Keep the ref in sync so the socket onmessage closure always has the latest index
+  currentMoveIndexRef.current = currentMoveIndex
 
   // 50-move rule and repetition (must be before effects that reference them)
   const halfMoveClock = parseInt(currentFen.split(' ')[4] ?? '0', 10)
@@ -612,12 +617,10 @@ export default function ChessApp() {
         setOnlineWaiting(msg.waiting)
         setFlipped(msg.color === 'b')
         setPlayerColor(msg.color)
-        // Sync timer from server
-        if (msg.timeControl) {
-          setTimeControl(msg.timeControl)
-          setWhiteTime(msg.whiteTime)
-          setBlackTime(msg.blackTime)
-        }
+        // Sync timer from server (always, so both players share the same clock)
+        setTimeControl(msg.timeControl)
+        setWhiteTime(msg.whiteTime)
+        setBlackTime(msg.blackTime)
         // Restore board state for reconnections
         if (msg.moves.length > 0) {
           const tmp = new Chess()
@@ -648,15 +651,15 @@ export default function ChessApp() {
 
       if (msg.type === 'move') {
         const { move, fen, whiteTime, blackTime } = msg
-        // Ignore sentinel (time-control sync with empty move)
         if (move.from && move.to) {
           const g = new Chess(fen)
           const soundType = g.isCheckmate() ? 'checkmate' : g.inCheck() ? 'check' : (move as { captured?: string }).captured ? 'capture' : 'move'
-          applyMove(fen, { from: move.from as Square, to: move.to as Square, san: move.san, lan: move.lan, promotion: move.promotion }, currentMoveIndex, soundType)
+          // Use the ref so we always get the latest index, not the stale closure value
+          applyMove(fen, { from: move.from as Square, to: move.to as Square, san: move.san, lan: move.lan, promotion: move.promotion }, currentMoveIndexRef.current, soundType)
         }
-        // Always sync the authoritative clock values from server
-        setWhiteTime(whiteTime)
-        setBlackTime(blackTime)
+        // Sync authoritative clock values from server
+        if (typeof whiteTime === 'number') setWhiteTime(whiteTime)
+        if (typeof blackTime === 'number') setBlackTime(blackTime)
         return
       }
 
@@ -672,6 +675,13 @@ export default function ChessApp() {
           setDrawAccepted(true)
         }
         setOnlineDrawOffered(false)
+        return
+      }
+
+      if (msg.type === 'time-control-set') {
+        setTimeControl(msg.timeControl)
+        setWhiteTime(msg.whiteTime)
+        setBlackTime(msg.blackTime)
         return
       }
 
