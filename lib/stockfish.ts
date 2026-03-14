@@ -31,21 +31,25 @@ class StockfishEngine extends EventEmitter {
 
   start() {
     const nativeBinaryPath = path.join(process.cwd(), 'engines', 'stockfish')
-    const canUseNative = fs.existsSync(nativeBinaryPath)
+    const forceWasm = process.env.STOCKFISH_FORCE_WASM === '1'
+    const canUseNative = fs.existsSync(nativeBinaryPath) && !forceWasm
 
     if (canUseNative) {
       this.backend = 'native'
       this.process = spawn(nativeBinaryPath, [], { stdio: 'pipe' })
       console.log('[SF] using native backend:', nativeBinaryPath)
     } else {
-      const wasmSrc = path.join(process.cwd(), 'node_modules', 'stockfish', 'src', 'stockfish.js')
-      const wasmBin = path.join(process.cwd(), 'node_modules', 'stockfish', 'bin', 'stockfish.js')
-      const wasmEntry = fs.existsSync(wasmSrc) ? wasmSrc : wasmBin
+      const wasmRepoEntry = path.join(process.cwd(), 'engines', 'wasm', 'stockfish.js')
+      const wasmNodeBin = path.join(process.cwd(), 'node_modules', 'stockfish', 'bin', 'stockfish.js')
+      const wasmEntry = fs.existsSync(wasmRepoEntry) ? wasmRepoEntry : wasmNodeBin
       if (!fs.existsSync(wasmEntry)) {
         throw new Error('Stockfish WASM fallback not found. Install "stockfish" package.')
       }
       this.backend = 'wasm-node'
-      this.process = spawn(process.execPath, [wasmEntry], { stdio: 'pipe' })
+      this.process = spawn(process.execPath, [wasmEntry], {
+        stdio: 'pipe',
+        cwd: path.dirname(wasmEntry),
+      })
       console.log('[SF] native binary missing; using WASM backend:', wasmEntry)
     }
 
@@ -183,6 +187,10 @@ class StockfishEngine extends EventEmitter {
 
   isReady() {
     return this.ready
+  }
+
+  getBackend() {
+    return this.backend
   }
 }
 
