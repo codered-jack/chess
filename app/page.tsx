@@ -911,8 +911,8 @@ export default function ChessApp() {
 
   const handleNewGame = () => {
     if (gameMode === 'two-player' && onlineRoomId) {
-      // Send new-game to server; server resets state and broadcasts back to both players
-      // so the room stays the same — no new URL/invite needed
+      // Close modal immediately for good UX; full board reset comes from server broadcast
+      setShowGameOverModal(false)
       sendOnlineMessage({ type: 'new-game' })
       return
     }
@@ -1413,23 +1413,35 @@ export default function ChessApp() {
               </div>
 
               <div className="w-full border-t border-white/8 pt-5 flex flex-col gap-3">
-                <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide text-center">Play again as</p>
-                <div className="grid grid-cols-2 gap-3">
+                {gameMode === 'two-player' && onlineRoomId ? (
+                  // Online mode: colors are fixed by room slot — just offer a rematch
                   <button
-                    onClick={() => handleNewGameAs('w')}
-                    className="flex flex-col items-center gap-2 py-3 px-4 rounded-xl bg-[#f0ead8] hover:bg-[#fffdf5] border border-[#d4c89a] transition-all"
+                    onClick={handleNewGame}
+                    className="w-full py-3 px-4 rounded-xl bg-[#86b114]/15 hover:bg-[#86b114]/25 border border-[#86b114]/40 text-[#86b114] font-semibold text-sm transition-all"
                   >
-                    <span className="text-2xl text-[#1a1a1a]">♔</span>
-                    <span className="text-xs font-semibold text-[#2a2a2a]">White</span>
+                    Rematch
                   </button>
-                  <button
-                    onClick={() => handleNewGameAs('b')}
-                    className="flex flex-col items-center gap-2 py-3 px-4 rounded-xl bg-[#2c2c2c] hover:bg-[#3a3a3a] border border-[#555] transition-all"
-                  >
-                    <span className="text-2xl text-[#f0f0f0]">♚</span>
-                    <span className="text-xs font-semibold text-[#e0e0e0]">Black</span>
-                  </button>
-                </div>
+                ) : (
+                  <>
+                    <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide text-center">Play again as</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        onClick={() => handleNewGameAs('w')}
+                        className="flex flex-col items-center gap-2 py-3 px-4 rounded-xl bg-[#f0ead8] hover:bg-[#fffdf5] border border-[#d4c89a] transition-all"
+                      >
+                        <span className="text-2xl text-[#1a1a1a]">♔</span>
+                        <span className="text-xs font-semibold text-[#2a2a2a]">White</span>
+                      </button>
+                      <button
+                        onClick={() => handleNewGameAs('b')}
+                        className="flex flex-col items-center gap-2 py-3 px-4 rounded-xl bg-[#2c2c2c] hover:bg-[#3a3a3a] border border-[#555] transition-all"
+                      >
+                        <span className="text-2xl text-[#f0f0f0]">♚</span>
+                        <span className="text-xs font-semibold text-[#e0e0e0]">Black</span>
+                      </button>
+                    </div>
+                  </>
+                )}
                 <button
                   onClick={() => setShowGameOverModal(false)}
                   className="w-full py-2 px-4 rounded-lg bg-transparent border border-white/8 text-gray-500 hover:text-gray-300 hover:border-white/15 text-xs font-semibold transition-all"
