@@ -96,11 +96,18 @@ export async function GET(req: NextRequest) {
   engine.setPosition(fen, moves)
 
   const encoder = new TextEncoder()
+
+  // Hoisted so cancel() can remove listeners without calling engine.stop().
+  // Calling engine.stop() from cancel() is dangerous: it fires asynchronously
+  // (after the client disconnects) and can emit a premature bestmove that
+  // consumes the *next* request's once-listener before real analysis finishes.
+  let cleanup = () => {}
+
   const stream = new ReadableStream({
     start(controller) {
       let closed = false
 
-      const cleanup = () => {
+      cleanup = () => {
         engine.removeListener('info', onInfo)
         engine.removeListener('bestmove', onBestMove)
       }
@@ -131,7 +138,12 @@ export async function GET(req: NextRequest) {
       engine.go(depth ? { depth } : { movetime })
     },
     cancel() {
-      engine.stop()
+      // Remove our listeners but do NOT call engine.stop() here.
+      // This cancel() fires asynchronously (when the client disconnects) and
+      // can race with a new request that has already registered its own listeners.
+      // The next request's engine.stop() call at the top of the handler is the
+      // correct place to stop the engine.
+      cleanup()
     },
   })
 

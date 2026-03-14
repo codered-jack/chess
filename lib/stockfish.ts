@@ -81,18 +81,22 @@ class StockfishEngine extends EventEmitter {
       this.readyRejectors = []
       this.readyResolvers = []
       console.error('[SF] process failed to start:', err.message)
+      // Allow getEngine() to spawn a fresh instance on next call
+      if (engineInstance === this) engineInstance = null
     })
 
     this.process.on('exit', (code) => {
       console.log('[SF] process exited with code', code, 'backend:', this.backend)
       this.ready = false
-      if (!this.failed && !this.ready) {
+      if (!this.failed) {
         this.failed = true
         this.startError = new Error(`Stockfish process exited before ready (code ${code ?? 'unknown'})`)
         this.readyRejectors.forEach((reject) => reject(this.startError as Error))
         this.readyRejectors = []
         this.readyResolvers = []
       }
+      // Allow getEngine() to spawn a fresh instance on next call
+      if (engineInstance === this) engineInstance = null
     })
 
     this.send('uci')
@@ -174,6 +178,9 @@ class StockfishEngine extends EventEmitter {
         const err = new Error('Stockfish engine startup timed out')
         this.failed = true
         this.startError = err
+        this.readyResolvers = []
+        this.readyRejectors = []
+        if (engineInstance === this) engineInstance = null
         reject(err)
       }, 15000)
 
@@ -196,6 +203,9 @@ class StockfishEngine extends EventEmitter {
   }
 
   configure(options: StockfishOptions) {
+    // Reset ready so the caller's waitReady() blocks until the engine has processed
+    // all setoption commands and the stop's bestmove has already been emitted.
+    this.ready = false
     if (options.threads) this.send(`setoption name Threads value ${options.threads}`)
     if (options.hash) this.send(`setoption name Hash value ${options.hash}`)
     if (options.multiPV) this.send(`setoption name MultiPV value ${options.multiPV}`)
@@ -236,6 +246,10 @@ class StockfishEngine extends EventEmitter {
     return this.ready
   }
 
+  hasFailed() {
+    return this.failed
+  }
+
   getBackend() {
     return this.backend
   }
@@ -245,7 +259,10 @@ class StockfishEngine extends EventEmitter {
 let engineInstance: StockfishEngine | null = null
 
 export function getEngine(): StockfishEngine {
-  if (!engineInstance) {
+  if (!engineInstance || engineInstance.hasFailed()) {
+    if (engineInstance) {
+      try { engineInstance.quit() } catch { /* ignore */ }
+    }
     engineInstance = new StockfishEngine()
     engineInstance.start()
   }
