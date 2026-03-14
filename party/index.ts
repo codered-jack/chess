@@ -116,12 +116,19 @@ export default class ChessRoom implements Party.Server {
       this.whiteId = conn.id
       conn.setState({ color: 'w' })
       await this.persist()
+      // waiting = true only if black hasn't joined yet
+      // (black may already be here when player 1 chose black and player 2 gets white)
       send(conn, {
         type: 'welcome', color: 'w',
-        fen: this.game.fen(), moves: this.moves, waiting: true,
+        fen: this.game.fen(), moves: this.moves, waiting: !this.blackId,
         timeControl: this.timeControl,
         whiteTime: this.whiteTime, blackTime: this.blackTime,
       })
+      // If black is already connected, notify them that white joined
+      if (this.blackId) {
+        const blackConn = this.room.getConnection(this.blackId)
+        if (blackConn) send(blackConn, { type: 'opponent-joined' })
+      }
       return
     }
 
@@ -130,14 +137,17 @@ export default class ChessRoom implements Party.Server {
       this.blackId = conn.id
       conn.setState({ color: 'b' })
       await this.persist()
+      // waiting = true only if white hasn't joined yet
       send(conn, {
         type: 'welcome', color: 'b',
-        fen: this.game.fen(), moves: this.moves, waiting: false,
+        fen: this.game.fen(), moves: this.moves, waiting: !this.whiteId,
         timeControl: this.timeControl,
         whiteTime: this.whiteTime, blackTime: this.blackTime,
       })
-      const whiteConn = this.room.getConnection(this.whiteId)
-      if (whiteConn) send(whiteConn, { type: 'opponent-joined' })
+      if (this.whiteId) {
+        const whiteConn = this.room.getConnection(this.whiteId)
+        if (whiteConn) send(whiteConn, { type: 'opponent-joined' })
+      }
       return
     }
 
