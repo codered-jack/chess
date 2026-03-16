@@ -78,6 +78,7 @@ export default function ChessApp() {
   const [boardFullscreen, setBoardFullscreen] = useState(false)
   const [leftPanelOpen, setLeftPanelOpen] = useState(true)
   const [rightPanelOpen, setRightPanelOpen] = useState(true)
+  const [isMobile, setIsMobile] = useState(false)
 
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
   const [legalMoves, setLegalMoves] = useState<Square[]>([])
@@ -293,8 +294,9 @@ export default function ChessApp() {
     if (typeof window === 'undefined') return
 
     const onResize = () => {
-      const shouldAutoCollapse = window.innerWidth < LEFT_PANEL_COLLAPSE_BREAKPOINT
-      if (shouldAutoCollapse) {
+      const w = window.innerWidth
+      setIsMobile(w < 768)
+      if (w < LEFT_PANEL_COLLAPSE_BREAKPOINT) {
         setLeftPanelOpen(false)
         setRightPanelOpen(false)
       }
@@ -1056,26 +1058,30 @@ export default function ChessApp() {
   const showRightPanel = !boardFullscreen && rightPanelOpen
   // Board size is always fixed, panels overlay not push
   // 116px = header; 32px = py-4 top+bottom; 56px = captured rows; pl-4(16)+pr-180+evalbar(~50) = 246px horizontal
-  const boardWidthForLayout = boardFullscreen ? 'min(80vw, 80vh, 576px)' : 'min(calc(100vh - 204px), calc(100vw - 260px))'
+  const boardWidthForLayout = boardFullscreen
+    ? 'min(80vw, 80vh, 576px)'
+    : isMobile
+      ? 'min(calc(100vw - 8px), calc(100dvh - 176px))'
+      : 'min(calc(100vh - 204px), calc(100vw - 260px))'
 
   return (
-    <div className="h-screen bg-[#262421] text-white flex flex-col overflow-hidden">
+    <div className="h-dvh bg-[#262421] text-white flex flex-col overflow-hidden">
 
       {/* ── Header ── */}
-      <header className={`${boardFullscreen ? 'hidden' : 'shrink-0 h-14 px-6 flex items-center gap-4 bg-[#1a1714] border-b border-white/6'}`}>
-        <div className="flex items-center gap-2.5">
-          <span className="text-2xl leading-none">♟</span>
-          <span className="text-base font-bold text-white tracking-tight">Chess</span>
-          <span className="text-[11px] font-semibold text-[#86b114] bg-[#86b114]/15 px-2 py-0.5 rounded-full">SF18</span>
+      <header className={`${boardFullscreen ? 'hidden' : 'shrink-0 h-12 md:h-14 px-3 md:px-6 flex items-center gap-2 md:gap-4 bg-[#1a1714] border-b border-white/6'}`}>
+        <div className="flex items-center gap-2">
+          <span className="text-xl md:text-2xl leading-none">♟</span>
+          <span className="text-sm md:text-base font-bold text-white tracking-tight">Chess</span>
+          <span className="hidden sm:block text-[11px] font-semibold text-[#86b114] bg-[#86b114]/15 px-2 py-0.5 rounded-full">SF18</span>
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
-          {/* Engine health pill */}
+        <div className="ml-auto flex items-center gap-1.5 md:gap-2">
+          {/* Engine health — dot+label on desktop, dot-only on mobile */}
           <button
             onClick={checkEngineHealth}
             disabled={engineStatus === 'checking'}
             title={engineStatusMsg || 'Click to check engine'}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all border bg-white/5 border-white/8 text-gray-300 hover:bg-white/10 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-1.5 px-2 md:px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all border bg-white/5 border-white/8 text-gray-300 hover:bg-white/10 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <span className={`w-2 h-2 rounded-full shrink-0 transition-colors ${
               engineStatus === 'ready'    ? 'bg-[#86b114]' :
@@ -1083,39 +1089,42 @@ export default function ChessApp() {
               engineStatus === 'checking' ? 'bg-yellow-400 animate-pulse' :
               'bg-white/30'
             }`} />
-            <span className={
+            <span className={`hidden md:block ${
               engineStatus === 'ready' ? 'text-[#86b114]' :
               engineStatus === 'error' ? 'text-red-400' :
               'text-gray-400'
-            }>
+            }`}>
               {engineStatus === 'checking' ? 'Checking…' :
                engineStatus === 'ready'    ? 'Engine ready' :
                engineStatus === 'error'    ? 'Engine error' :
                'Engine'}
             </span>
           </button>
+          {/* Fullscreen — hidden on mobile (not useful on small screens) */}
           <button
             onClick={() => setBoardFullscreen((v) => !v)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all border bg-white/5 border-white/8 text-gray-300 hover:bg-white/10 hover:text-white"
+            className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all border bg-white/5 border-white/8 text-gray-300 hover:bg-white/10 hover:text-white"
           >
-            {boardFullscreen ? 'Exit Fullscreen' : 'Fullscreen Board'}
+            {boardFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
           </button>
+          {/* Sound — icon+label on desktop, icon-only on mobile */}
           <button
             onClick={() => setSoundEnabled((v) => !v)}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all border ${
+            title={soundEnabled ? 'Sound: On' : 'Sound: Off'}
+            className={`flex items-center gap-1.5 px-2 md:px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all border ${
               soundEnabled
                 ? 'bg-[#86b114]/20 border-[#86b114]/40 text-[#86b114]'
                 : 'bg-white/5 border-white/8 text-gray-500 hover:bg-white/10 hover:text-gray-300'
             }`}
           >
-            <span className={`w-2 h-2 rounded-full transition-colors ${soundEnabled ? 'bg-[#86b114]' : 'bg-gray-600'}`} />
-            {soundEnabled ? 'Sound: On' : 'Sound: Off'}
+            <span className="text-sm leading-none">{soundEnabled ? '🔊' : '🔇'}</span>
+            <span className="hidden md:block">{soundEnabled ? 'Sound: On' : 'Sound: Off'}</span>
           </button>
+          {/* Hints — icon+label on desktop, icon-only on mobile */}
           <button
             onClick={() => {
               setShowHints((v) => {
                 if (v) {
-                  // turning hints OFF: clear any active selection so yellow square disappears too
                   setSelectedSquare(null)
                   setLegalMoves([])
                   setBestMoveArrow([])
@@ -1123,14 +1132,15 @@ export default function ChessApp() {
                 return !v
               })
             }}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-semibold transition-all border ${
+            title={showHints ? 'Hints: On' : 'Hints: Off'}
+            className={`flex items-center gap-1.5 px-2 md:px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all border ${
               showHints
                 ? 'bg-[#86b114]/20 border-[#86b114]/40 text-[#86b114]'
                 : 'bg-white/5 border-white/8 text-gray-500 hover:bg-white/10 hover:text-gray-300'
             }`}
           >
-            <span className={`w-2 h-2 rounded-full transition-colors ${showHints ? 'bg-[#86b114]' : 'bg-gray-600'}`} />
-            {showHints ? 'Hints: On' : 'Hints: Off'}
+            <span className="text-sm leading-none">💡</span>
+            <span className="hidden md:block">{showHints ? 'Hints: On' : 'Hints: Off'}</span>
           </button>
         </div>
       </header>
@@ -1174,17 +1184,17 @@ export default function ChessApp() {
               Exit Fullscreen
             </button>
           )}
-          <div className={`flex items-center justify-center h-full w-full box-border ${boardFullscreen ? '' : 'gap-8 pl-4 pr-[180px] py-4'}`}>
-            {/* Eval bar */}
+          <div className={`flex items-center justify-center h-full w-full box-border ${boardFullscreen ? '' : 'gap-1 p-1 sm:gap-4 sm:p-2 md:gap-8 md:pl-4 md:pr-[180px] md:py-4'}`}>
+            {/* Eval bar — hidden on mobile (too narrow to be useful) */}
             {!boardFullscreen && (
-              <div className="self-stretch py-8 flex flex-col">
+              <div className="hidden md:flex self-stretch py-8 flex-col">
                 <EvalBar score={latestScore} flipped={flipped} turn={turn} />
               </div>
             )}
             {/* Board wrapper: fixed size, never shrinks */}
             <div
               className="relative shrink-0 flex flex-col gap-3"
-              style={{ width: boardWidthForLayout, minWidth: '300px' }}
+              style={{ width: boardWidthForLayout, minWidth: isMobile ? '0' : '300px' }}
             >
               {/* Opponent row: captured pieces + clock */}
               {!boardFullscreen && (
@@ -1197,7 +1207,7 @@ export default function ChessApp() {
                   />
                 </div>
               )}
-              <div style={{ height: boardWidthForLayout, minHeight: '300px' }} className="relative">
+              <div style={{ height: boardWidthForLayout, minHeight: isMobile ? '0' : '300px' }} className="relative">
                 <ChessBoard
                   game={currentGame}
                   flipped={flipped}
@@ -1238,7 +1248,7 @@ export default function ChessApp() {
               />
             )}
             <aside
-              className={`absolute top-0 left-0 h-full z-40 flex flex-col bg-[#1a1714] border-r border-white/6 overflow-y-auto transition-transform duration-200 w-72 ${showLeftPanel ? 'translate-x-0' : '-translate-x-full'}`}
+              className={`absolute top-0 left-0 h-full z-40 flex flex-col bg-[#1a1714] border-r border-white/6 overflow-y-auto transition-transform duration-200 w-[85vw] sm:w-72 max-w-72 ${showLeftPanel ? 'translate-x-0' : '-translate-x-full'}`}
             >
               <div className="p-4">
                 <EnginePanel
@@ -1267,8 +1277,8 @@ export default function ChessApp() {
             <button
               onClick={() => setLeftPanelOpen((v) => !v)}
               aria-label={showLeftPanel ? 'Collapse engine panel' : 'Expand engine panel'}
-              className="absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-5 h-12 bg-[#1a1714] border border-white/10 rounded-r-lg hover:bg-[#2a2520] transition-all"
-              style={{ left: showLeftPanel ? '288px' : '0px', transition: 'left 200ms' }}
+              className="absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-6 h-14 sm:w-5 sm:h-12 bg-[#1a1714] border border-white/10 rounded-r-lg hover:bg-[#2a2520] transition-all"
+              style={{ left: showLeftPanel ? 'min(288px, 85vw)' : '0px', transition: 'left 200ms' }}
             >
               <svg width="10" height="14" viewBox="0 0 10 14" fill="none" className="text-gray-400">
                 {showLeftPanel
@@ -1290,7 +1300,7 @@ export default function ChessApp() {
               />
             )}
             <aside
-              className={`absolute top-0 right-0 h-full z-40 flex flex-col bg-[#1a1714] border-l border-white/6 overflow-hidden transition-transform duration-200 w-[380px] ${showRightPanel ? 'translate-x-0' : 'translate-x-full'}`}
+              className={`absolute top-0 right-0 h-full z-40 flex flex-col bg-[#1a1714] border-l border-white/6 overflow-hidden transition-transform duration-200 w-[85vw] sm:w-[380px] max-w-[380px] ${showRightPanel ? 'translate-x-0' : 'translate-x-full'}`}
             >
               {/* Online room invite bar */}
               {gameMode === 'two-player' && onlineRoomId && (
@@ -1372,8 +1382,8 @@ export default function ChessApp() {
             <button
               onClick={() => setRightPanelOpen((v) => !v)}
               aria-label={showRightPanel ? 'Collapse controls panel' : 'Expand controls panel'}
-              className="absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-5 h-12 bg-[#1a1714] border border-white/10 rounded-l-lg hover:bg-[#2a2520] transition-all"
-              style={{ right: showRightPanel ? '380px' : '0px', transition: 'right 200ms' }}
+              className="absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-6 h-14 sm:w-5 sm:h-12 bg-[#1a1714] border border-white/10 rounded-l-lg hover:bg-[#2a2520] transition-all"
+              style={{ right: showRightPanel ? 'min(380px, 85vw)' : '0px', transition: 'right 200ms' }}
             >
               <svg width="10" height="14" viewBox="0 0 10 14" fill="none" className="text-gray-400">
                 {showRightPanel
